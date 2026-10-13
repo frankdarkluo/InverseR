@@ -1,0 +1,51 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "inverser"
+version = "0.1.0"
+description = "Reproducible, provenance-aware inverse snooker research."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "numpy>=1.26,<2.4",
+    "pooltool-billiards==0.6.0",
+    "pydantic>=2.10,<3",
+    "PyYAML>=6,<7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<9", "ruff>=0.11,<1", "mypy>=1.15,<2"]
+data = ["huggingface-hub>=1.0,<2"]
+processing = ["opencv-python-headless>=4.12,<5"]
+inference = ["httpx>=0.28,<1"]
+
+[project.scripts]
+inverser = "inverser.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[[tool.uv.index]]
+name = "panda3d-archive"
+url = "https://archive.panda3d.org/simple/"
+explicit = true
+
+[tool.uv.sources]
+panda3d = [{ index = "panda3d-archive", marker = "sys_platform != 'darwin'" }]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.12"
+files = ["src/inverser"]
+check_untyped_defs = true
+ignore_missing_imports = true

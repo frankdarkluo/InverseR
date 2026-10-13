@@ -1,0 +1,151 @@
+{
+  "schema_version": "source-registry-v1",
+  "checked_on": "2026-10-10",
+  "sources": [
+    {
+      "source_id": "rodriguez_lozano_snooker",
+      "url": "https://github.com/FJ-Rodriguez-Lozano/Billiard-dataset",
+      "game": "snooker",
+      "license": "CC-BY-SA-4.0",
+      "license_evidence": "https://github.com/FJ-Rodriguez-Lozano/Billiard-dataset/blob/main/README.md#L159",
+      "credit": "F. J. Rodriguez-Lozano et al., Billiard-dataset, CC BY-SA 4.0",
+      "acquire": "allowed",
+      "process": "allowed",
+      "redistribute": "allowed",
+      "access": "blocked",
+      "disposition": "Official SharePoint redirect returned 403. User-supplied direct OneDrive folder URL also returned HTTP 403 on 2026-10-10; browser navigation redirected to the university Microsoft account sign-in page. No anonymous file listing or authorized media download established; no verified author-provided mirror. Author advertises 100 snooker recordings, including 16 manual-path-image examples, not 116 independent shots. No numerical cue-action labels verified.",
+      "assets": []
+    },
+    {
+      "source_id": "commons_german_masters_2012",
+      "url": "https://commons.wikimedia.org/wiki/Category:Files_by_DerHexer/German_Masters_Snooker_Final_2012",
+      "game": "snooker",
+      "license": "CC-BY-SA-4.0",
+      "license_evidence": "https://commons.wikimedia.org/wiki/User:DerHexer/licence",
+      "credit": "DerHexer, Wikimedia Commons, CC-by-sa 4.0",
+      "acquire": "allowed",
+      "process": "allowed",
+      "redistribute": "allowed",
+      "access": "ready",
+      "disposition": "Three short unlabelled clips acquired and decoded. Sampled-frame triage found cropped table coverage and camera motion, without verified complete stationary endpoint pairs. Zero accepted primary tasks; file count is not shot count.",
+      "assets": [
+        {
+          "asset_id": "osullivan_2012_clip2",
+          "url": "https://upload.wikimedia.org/wikipedia/commons/b/bb/Ronnie_O%E2%80%99Sullivan_at_German_Masters_Snooker_Final_%28DerHexer%29_2012-02-05_2.ogv",
+          "rights_page": "https://commons.wikimedia.org/wiki/File:Ronnie_O%E2%80%99Sullivan_at_German_Masters_Snooker_Final_%28DerHexer%29_2012-02-05_2.ogv",
+          "expected_bytes": 5250213
+        },
+        {
+          "asset_id": "osullivan_2012_clip5",
+          "url": "https://upload.wikimedia.org/wikipedia/commons/4/4e/Ronnie_O%E2%80%99Sullivan_at_German_Masters_Snooker_Final_%28DerHexer%29_2012-02-05_5.ogv",
+          "rights_page": "https://commons.wikimedia.org/wiki/File:Ronnie_O%E2%80%99Sullivan_at_German_Masters_Snooker_Final_%28DerHexer%29_2012-02-05_5.ogv",
+          "expected_bytes": 2023508
+        },
+        {
+          "asset_id": "osullivan_2012_clip6",
+          "url": "https://upload.wikimedia.org/wikipedia/commons/c/c2/Ronnie_O%E2%80%99Sullivan_at_German_Masters_Snooker_Final_%28DerHexer%29_2012-02-05_6.ogv",
+          "rights_page": "https://commons.wikimedia.org/wiki/File:Ronnie_O%E2%80%99Sullivan_at_German_Masters_Snooker_Final_%28DerHexer%29_2012-02-05_6.ogv",
+          "expected_bytes": 1643508
+        }
+      ]
+    },
+    {
+      "source_id": "hf_spdev39_snooker",
+      "url": "https://huggingface.co/datasets/spdev39/snookerVideos",
+      "game": "snooker",
+      "license": "unverified",
+      "license_evidence": "https://huggingface.co/api/datasets/spdev39/snookerVideos?blobs=true",
+      "credit": "Unresolved media rights holder",
+      "acquire": "unverified",
+      "process": "unverified",
+      "redistribute": "unverified",
+      "access": "blocked",
+      "technical_access": "reachable",
+      "local_download_requested": true,
+      "disposition": "Complete pinned raw snapshot acquired locally on 2026-10-10 at revision dcbcdf46b71c30e76bf51220f697836abd9c60bf: 54 files,149838665026 bytes,32 videos totalling228.38 hours and21 corner JSON sidecars. All source checksums and video stream probes passed; no authentication used. Explicit user acquisition request is not a media licence: source-use rights remain unverified and benchmark/training eligibility remains blocked. No accepted labelled single-shot tasks yet.",
+      "assets": []
+    },
+    {
+      "source_id": "abdkhanstd_sports_snooker",
+      "url": "https://github.com/abdkhanstd/Sports",
+      "game": "snooker",
+      "license": "unverified",
+      "license_evidence": "https://github.com/abdkhanstd/Sports",
+      "credit": "Unresolved media rights holder",
+      "acquire": "unverified",
+      "process": "unverified",
+      "redistribute": "unverified",
+      "access": "blocked",
+      "disposition": "Author reports four snooker broadcasts with scorebox/event annotations, not ball trajectories. Archive HEAD 200 was followed by an error HTML page on GET; no sample media URL or broadcast grant verified.",
+      "assets": []
+    },
+    {
+      "source_id": "ogaeons_snookercv",
+      "url": "https://github.com/OgAeons/snookerCV",
+      "game": "snooker",
+      "license": "unverified",
+      "license_evidence": "https://github.com/OgAeons/snookerCV",
+      "credit": "Unresolved video rights holder",
+      "acquire": "unverified",
+      "process": "unverified",
+      "redistribute": "unverified",
+      "access": "blocked",
+      "disposition": "Repository has three input MP4 files; sample1.mp4 HEAD 200, 22967521 bytes. README CC BY 4.0 statement concerns the labelled detection dataset, not an explicit media grant. sample1.mp4 duplicates Zulfi2003 snooker_video1.mp4 by Git blob ID.",
+      "assets": []
+    },
+    {
+      "source_id": "zulfi2003_snooker_tracking",
+      "url": "https://github.com/Zulfi2003/snookerball_tracking",
+      "game": "snooker",
+      "license": "unverified",
+      "license_evidence": "https://github.com/Zulfi2003/snookerball_tracking",
+      "credit": "Unresolved video rights holder",
+      "acquire": "unverified",
+      "process": "unverified",
+      "redistribute": "unverified",
+      "access": "blocked",
+      "disposition": "Repository has five input MP4s plus one processed output, not six independent recordings. Input video4 HEAD 200, 7366947 bytes. No media licence or recording ownership statement verified.",
+      "assets": []
+    },
+    {
+      "source_id": "archive_play_snooker",
+      "url": "https://archive.org/details/vid-20231030-130126",
+      "game": "snooker",
+      "license": "unverified",
+      "license_evidence": "https://archive.org/metadata/vid-20231030-130126",
+      "credit": "Metadata attributes copyright to BBC; no reuse grant established",
+      "acquire": "unverified",
+      "process": "unverified",
+      "redistribute": "unverified",
+      "access": "blocked",
+      "disposition": "One instructional VHS title with two MP4 representations, duration 6639.89 seconds. Original MP4 HEAD redirect reached 200, 3558521347 bytes. Rights/licence fields are empty; uploader copyright attribution is not a BBC reuse grant.",
+      "assets": []
+    }
+  ],
+  "excluded": [
+    {
+      "url": "https://api.figshare.com/v2/articles/13604480",
+      "reason": "Match results, tournaments and rankings; no ball-state or shot-video corpus."
+    },
+    {
+      "url": "https://zenodo.org/api/records/8180864",
+      "reason": "Search-generated dataset claim unverified; primary endpoint returned 404."
+    },
+    {
+      "url": "https://github.com/SherryMaster/Snooker-Eye",
+      "reason": "Repository has no video files. Its dataset card describes 6280 detection images, not a shot-trajectory corpus."
+    },
+    {
+      "url": "https://github.com/esmeagol/snooker",
+      "reason": "Processing pipeline without supplied video assets. A software MIT claim does not establish rights to externally downloaded videos."
+    }
+  ],
+  "duplicate_media_evidence": [
+    {
+      "left": "https://api.github.com/repos/OgAeons/snookerCV/contents/videos/sample1.mp4",
+      "right": "https://api.github.com/repos/Zulfi2003/snookerball_tracking/contents/videos/snooker_video1.mp4",
+      "git_blob_id": "827f8a091be3b9297a6096e0a0918672e4f09742",
+      "interpretation": "Identical Git blob and size; do not count these as independent footage."
+    }
+  ]
+}
