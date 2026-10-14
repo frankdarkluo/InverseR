@@ -3,18 +3,21 @@ import json
 import logging
 import sqlite3
 from pathlib import Path
+from typing import Literal
 
 import httpx
-from pydantic import Field
+from pydantic import Field, TypeAdapter
 
 from inverser.metrics import EndpointScore, score_endpoint
 from inverser.model_adapters import ModelAdapter, ModelCall, ModelReply
-from inverser.physics import SnookerSimulator
+from inverser.physics import Replay, SimulationFailure, SnookerSimulator
 from inverser.runtime import fingerprint, write_json
-from inverser.schemas import CueAction, Record, ShotRecord
+from inverser.schemas import CueAction, Layout, Record, ShotRecord
 from inverser.study import GoalSubmission, SubmittedAction, make_study_case
 
 LOGGER = logging.getLogger(__name__)
+REPLAY_CODEC = TypeAdapter(Replay)
+PhysicsRole = Literal["agent_search", "hidden_judge", "offline_reference", "engineering"]
 
 
 class BudgetExhausted(RuntimeError):
@@ -25,10 +28,15 @@ class UnresolvedRequest(RuntimeError):
     pass
 
 
+class CachedSimulationFailure(SimulationFailure):
+    pass
+
+
 class BudgetLimits(Record):
     max_model_requests: int = Field(ge=0)
     max_physics_evaluations: int = Field(ge=0)
     max_physics_attempts: int | None = Field(default=None, ge=0)
+    max_total_tokens: int = Field(default=0, ge=0)
 
 
 class TrialLedger:
@@ -43,15 +51,31 @@ class TrialLedger:
               request_key TEXT PRIMARY KEY,
               status TEXT NOT NULL,
               reply_json TEXT,
-              error_code TEXT
+              error_code TEXT,
+              reserved_tokens INTEGER NOT NULL,
+              total_tokens INTEGER
             );
             CREATE TABLE IF NOT EXISTS physics (
               id INTEGER PRIMARY KEY,
               status TEXT NOT NULL,
               evaluations INTEGER
             );
+            CREATE TABLE IF NOT EXISTS physics_cache (
+              cache_key TEXT PRIMARY KEY,
+              reservation INTEGER NOT NULL UNIQUE,
+              replay_json TEXT,
+              error_code TEXT,
+              role TEXT NOT NULL
+            );
             """
         )
+        columns = {row[1] for row in self.connection.execute("PRAGMA table_info(physics_cache)")}
+        if "role" not in columns:
+            self.connection.execute(
+                "ALTER TABLE physics_cache ADD COLUMN role TEXT NOT NULL "
+                "DEFAULT 'legacy_unclassified'"
+            )
+            self.connection.commit()
         expected = fingerprint(limits.model_dump(mode="json"))
         row = self.connection.execute(
             "SELECT value FROM metadata WHERE key='budget_hash'"
@@ -81,7 +105,9 @@ class TrialLedger:
             ).fetchone()[0],
         }
 
-    def reserve_request(self, key: str) -> ModelReply | None:
+    def reserve_request(self, key: str, reserved_tokens: int = 0) -> ModelReply | None:
+        if reserved_tokens < 0:
+            raise ValueError("Token reservation cannot be negative")
         with self.connection:
             self.connection.execute("BEGIN IMMEDIATE")
             row = self.connection.execute(
@@ -97,20 +123,45 @@ class TrialLedger:
                 )
             if self.counts()["model_requests"] >= self.limits.max_model_requests:
                 raise BudgetExhausted("Model request budget exhausted")
+            occupied = self.connection.execute(
+                "SELECT COALESCE(SUM(COALESCE(total_tokens,reserved_tokens)),0) FROM requests"
+            ).fetchone()[0]
+            if reserved_tokens and occupied + reserved_tokens > self.limits.max_total_tokens:
+                raise BudgetExhausted("Token reservation budget exhausted")
             self.connection.execute(
-                "INSERT INTO requests(request_key,status) VALUES (?,'reserved')", (key,)
+                "INSERT INTO requests(request_key,status,reserved_tokens) VALUES (?,'reserved',?)",
+                (key, reserved_tokens),
             )
         return None
 
     def finish_request(self, key: str, reply: ModelReply) -> None:
+        row = self.connection.execute(
+            "SELECT reserved_tokens FROM requests WHERE request_key=? AND status='reserved'",
+            (key,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("A reply must finish exactly one reserved request")
+        overrun = (
+            row[0] > 0
+            and reply.usage.total_tokens is not None
+            and reply.usage.total_tokens > row[0]
+        )
         with self.connection:
             changed = self.connection.execute(
-                "UPDATE requests SET status='complete',reply_json=? "
+                "UPDATE requests SET status=?,reply_json=?,total_tokens=? "
                 "WHERE request_key=? AND status='reserved'",
-                (reply.model_dump_json(), key),
+                (
+                    "token_overrun" if overrun else "complete",
+                    reply.model_dump_json(),
+                    reply.usage.total_tokens,
+                    key,
+                ),
             ).rowcount
             if changed != 1:
                 raise ValueError("A reply must finish exactly one reserved request")
+        if overrun:
+            LOGGER.error("Provider token usage exceeded reservation for request %s", key)
+            raise BudgetExhausted("Provider token overrun recorded; stop and review the allocation")
 
     def fail_request(self, key: str, code: str, *, unknown_response: bool) -> None:
         with self.connection:
@@ -121,28 +172,100 @@ class TrialLedger:
             )
         LOGGER.error("Model request %s failed: %s", key, code)
 
+    def _reserve_physics_locked(self) -> int:
+        occupied = (
+            self.connection.execute(
+                "SELECT COALESCE(SUM(evaluations),0) + "
+                "SUM(CASE WHEN status='reserved' THEN 1 ELSE 0 END) FROM physics"
+            ).fetchone()[0]
+            or 0
+        )
+        attempt_limit = self.limits.max_physics_attempts
+        if attempt_limit is None:
+            attempt_limit = self.limits.max_physics_evaluations
+        if (
+            occupied >= self.limits.max_physics_evaluations
+            or self.counts()["physics_attempts"] >= attempt_limit
+        ):
+            raise BudgetExhausted("Physics evaluation/attempt budget exhausted")
+        cursor = self.connection.execute("INSERT INTO physics(status) VALUES ('reserved')")
+        if cursor.lastrowid is None:
+            raise RuntimeError("Physics reservation was not persisted")
+        return cursor.lastrowid
+
     def reserve_physics(self) -> int:
         with self.connection:
             self.connection.execute("BEGIN IMMEDIATE")
-            occupied = (
-                self.connection.execute(
-                    "SELECT COALESCE(SUM(evaluations),0) + "
-                    "SUM(CASE WHEN status='reserved' THEN 1 ELSE 0 END) FROM physics"
-                ).fetchone()[0]
-                or 0
+            return self._reserve_physics_locked()
+
+    def reserve_cached_physics(
+        self, key: str, *, role: PhysicsRole = "engineering"
+    ) -> tuple[int | None, Replay | None]:
+        if role not in ("agent_search", "hidden_judge", "offline_reference", "engineering"):
+            raise ValueError("A physics evaluation must declare a recognized evidence role")
+        with self.connection:
+            self.connection.execute("BEGIN IMMEDIATE")
+            row = self.connection.execute(
+                "SELECT p.status,c.replay_json,c.error_code,c.role "
+                "FROM physics_cache c JOIN physics p ON p.id=c.reservation WHERE c.cache_key=?",
+                (key,),
+            ).fetchone()
+            if row is not None:
+                if row[3] != role:
+                    raise ValueError("Cached physics evidence belongs to another or legacy role")
+                if row[0] == "reserved":
+                    raise UnresolvedRequest("Interrupted physics attempt requires explicit review")
+                if row[2] == "simulation_failure":
+                    raise CachedSimulationFailure(
+                        "Cached simulation failure; no repeated evaluation"
+                    )
+                if row[2] == "invalid_input":
+                    raise ValueError("Cached invalid physics input; no repeated evaluation")
+                if row[1] is None:
+                    raise RuntimeError("Completed physics cache entry has no result or error")
+                return None, REPLAY_CODEC.validate_json(row[1])
+            reservation = self._reserve_physics_locked()
+            self.connection.execute(
+                "INSERT INTO physics_cache(cache_key,reservation,role) VALUES (?,?,?)",
+                (key, reservation, role),
             )
-            attempt_limit = self.limits.max_physics_attempts
-            if attempt_limit is None:
-                attempt_limit = self.limits.max_physics_evaluations
-            if (
-                occupied >= self.limits.max_physics_evaluations
-                or self.counts()["physics_attempts"] >= attempt_limit
-            ):
-                raise BudgetExhausted("Physics evaluation/attempt budget exhausted")
-            cursor = self.connection.execute("INSERT INTO physics(status) VALUES ('reserved')")
-            if cursor.lastrowid is None:
-                raise RuntimeError("Physics reservation was not persisted")
-            return cursor.lastrowid
+            return reservation, None
+
+    def physics_usage_by_role(self) -> dict[str, dict[str, int]]:
+        rows = self.connection.execute(
+            "SELECT COALESCE(c.role,'unclassified'),COUNT(*),"
+            "COALESCE(SUM(p.evaluations),0),"
+            "SUM(CASE WHEN p.status='reserved' THEN 1 ELSE 0 END) "
+            "FROM physics p LEFT JOIN physics_cache c ON c.reservation=p.id "
+            "GROUP BY COALESCE(c.role,'unclassified')"
+        )
+        return {
+            row[0]: {"attempts": row[1], "evaluations": row[2], "unresolved": row[3]}
+            for row in rows
+        }
+
+    def finish_cached_physics(
+        self, reservation: int, evaluations: int, *, replay: Replay | None, error_code: str | None
+    ) -> None:
+        if (replay is None) == (error_code is None):
+            raise ValueError("A cached physics result requires exactly one replay or error")
+        if evaluations not in (0, 1):
+            raise ValueError("An instrumented replay must execute zero or one evaluations")
+        encoded = REPLAY_CODEC.dump_json(replay).decode() if replay is not None else None
+        with self.connection:
+            changed = self.connection.execute(
+                "UPDATE physics SET status='complete',evaluations=? "
+                "WHERE id=? AND status='reserved'",
+                (evaluations, reservation),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("Physics completion must match one reserved attempt")
+            changed = self.connection.execute(
+                "UPDATE physics_cache SET replay_json=?,error_code=? WHERE reservation=?",
+                (encoded, error_code, reservation),
+            ).rowcount
+            if changed != 1:
+                raise ValueError("Physics completion must match one cache reservation")
 
     def record_physics(self, reservation: int, evaluations: int) -> None:
         if evaluations not in (0, 1):
@@ -168,6 +291,8 @@ class TrialLedger:
             "output_tokens": [reply.usage.output_tokens for reply in replies],
             "total_tokens": [reply.usage.total_tokens for reply in replies],
         }
+        if len(replies) != self.counts()["model_requests"]:
+            return {field: None for field in fields}
         return {
             field: sum(value for value in values if value is not None)
             if all(value is not None for value in values)
@@ -178,7 +303,8 @@ class TrialLedger:
 
 def request_model(adapter: ModelAdapter, call: ModelCall, ledger: TrialLedger) -> ModelReply:
     key = adapter.request_key(call)
-    cached = ledger.reserve_request(key)
+    reservation = 0 if adapter.config.kind == "mock" else adapter.config.request_token_reservation
+    cached = ledger.reserve_request(key, reservation)
     if cached is not None:
         return cached
     try:
@@ -194,6 +320,52 @@ def request_model(adapter: ModelAdapter, call: ModelCall, ledger: TrialLedger) -
         raise
     ledger.finish_request(key, reply)
     return reply
+
+
+def recorded_replay(
+    initial: Layout,
+    action: CueAction,
+    simulator: SnookerSimulator,
+    ledger: TrialLedger,
+    *,
+    namespace: str,
+    role: PhysicsRole = "engineering",
+) -> tuple[Replay, bool]:
+    if not namespace:
+        raise ValueError("Physics caching requires an explicit search/judge namespace")
+    key = fingerprint(
+        {
+            "namespace": namespace,
+            "role": role,
+            "physics": simulator.metadata(),
+            "initial": initial.model_dump(mode="json"),
+            "action": action.model_dump(mode="json"),
+        }
+    )
+    reservation, cached = ledger.reserve_cached_physics(key, role=role)
+    if cached is not None:
+        return cached, True
+    if reservation is None:
+        raise RuntimeError("Uncached physics evaluation has no reservation")
+    before = simulator.rollouts
+    try:
+        replay = simulator.replay(initial, action)
+    except SimulationFailure:
+        ledger.finish_cached_physics(
+            reservation, simulator.rollouts - before, replay=None, error_code="simulation_failure"
+        )
+        LOGGER.error("Physics evaluation failed in namespace %s", namespace)
+        raise
+    except ValueError:
+        ledger.finish_cached_physics(
+            reservation, simulator.rollouts - before, replay=None, error_code="invalid_input"
+        )
+        LOGGER.error("Invalid physics input in namespace %s", namespace)
+        raise
+    ledger.finish_cached_physics(
+        reservation, simulator.rollouts - before, replay=replay, error_code=None
+    )
+    return replay, False
 
 
 def evaluate_submission(

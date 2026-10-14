@@ -17,6 +17,8 @@ from inverser.model_adapters import (
     BackendConfig,
     ModelAdapter,
     ModelCall,
+    ModelReply,
+    TokenUsage,
     rendered_asset,
 )
 from inverser.study import GoalSubmission
@@ -145,6 +147,7 @@ def test_unknown_response_is_not_rebilled_automatically(tmp_path, study_fixture)
     assert (
         ledger.connection.execute("SELECT status FROM requests").fetchone()[0] == "unknown_response"
     )
+    assert ledger.usage_totals()["total_tokens"] is None
     ledger.close()
 
 
@@ -224,3 +227,166 @@ def test_endpoint_and_revision_are_part_of_request_identity(study_fixture):
         ) as second,
     ):
         assert first.request_key(call) != second.request_key(call)
+
+
+def test_missing_usage_is_unknown_not_zero(tmp_path, study_fixture):
+    _, record, case = study_fixture
+    body = {
+        "model": "fixture",
+        "choices": [
+            {
+                "message": {
+                    "content": GoalSubmission.model_validate(
+                        {"action": record.witness_action.model_dump()}
+                    ).model_dump_json()
+                }
+            }
+        ],
+    }
+    ledger = TrialLedger(
+        tmp_path / "usage.sqlite", BudgetLimits(max_model_requests=1, max_physics_evaluations=0)
+    )
+    with ModelAdapter(
+        BackendConfig(
+            kind="mock", alias="test", model_id="fixture", base_url="https://fixture.invalid/v1"
+        ),
+        transport=httpx.MockTransport(lambda request: httpx.Response(200, json=body)),
+    ) as adapter:
+        reply = request_model(
+            adapter, ModelCall(view="structured", input=case.goal_input()), ledger
+        )
+    assert reply.usage.total_tokens is None
+    assert ledger.usage_totals()["total_tokens"] is None
+    ledger.close()
+
+
+def test_invalid_json_is_a_charged_recorded_failure(tmp_path, study_fixture):
+    _, _, case = study_fixture
+    ledger = TrialLedger(
+        tmp_path / "invalid.sqlite", BudgetLimits(max_model_requests=1, max_physics_evaluations=0)
+    )
+    with ModelAdapter(
+        BackendConfig(
+            kind="mock", alias="test", model_id="fixture", base_url="https://fixture.invalid/v1"
+        ),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200, json={"model": "fixture", "choices": [{"message": {"content": "not JSON"}}]}
+            )
+        ),
+    ) as adapter:
+        with pytest.raises(ValueError):
+            request_model(adapter, ModelCall(view="structured", input=case.goal_input()), ledger)
+    assert ledger.counts()["model_requests"] == 1
+    assert ledger.connection.execute("SELECT status FROM requests").fetchone()[0] == "known_error"
+    ledger.close()
+
+
+def test_forward_response_times_slots_and_geometry_are_checked(tmp_path, study_fixture):
+    _, record, case = study_fixture
+    source_input = case.forward_input(record.witness_action, (0.25,))
+    content = {
+        "frames": [{"time_s": 0.25, "state": source_input.initial.model_dump(mode="json")}],
+        "resting_state": case.goal_input().goal.model_dump(mode="json"),
+        "events": [],
+    }
+    replies = [json.dumps(content)]
+    altered = {**content, "frames": [{"time_s": 0.5, "state": content["frames"][0]["state"]}]}
+    replies.append(json.dumps(altered))
+    replies.append(
+        json.dumps(
+            {
+                **content,
+                "events": [{"event_type": "pocket", "time_s": 0.5, "participants": ["cue", "3"]}],
+            }
+        )
+    )
+    ledger = TrialLedger(
+        tmp_path / "forward.sqlite", BudgetLimits(max_model_requests=3, max_physics_evaluations=0)
+    )
+    with ModelAdapter(
+        BackendConfig(
+            kind="mock", alias="test", model_id="fixture", base_url="https://fixture.invalid/v1"
+        ),
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={"model": "fixture", "choices": [{"message": {"content": replies.pop(0)}}]},
+            )
+        ),
+    ) as adapter:
+        call = ModelCall(view="structured", input=source_input)
+        assert request_model(adapter, call, ledger).content
+        with pytest.raises(ValueError, match="sampling times"):
+            request_model(adapter, call.model_copy(update={"seed": 1}), ledger)
+        with pytest.raises(ValueError, match="unavailable"):
+            request_model(adapter, call.model_copy(update={"seed": 2}), ledger)
+    assert ledger.counts()["model_requests"] == 3
+    ledger.close()
+
+
+def test_token_reservations_are_conservative_when_usage_unknown(tmp_path):
+    ledger = TrialLedger(
+        tmp_path / "tokens.sqlite",
+        BudgetLimits(max_model_requests=3, max_physics_evaluations=0, max_total_tokens=30),
+    )
+    ledger.reserve_request("one", reserved_tokens=20)
+    ledger.finish_request(
+        "one",
+        ModelReply(backend_alias="test", model_id="fixture", content="{}", usage=TokenUsage()),
+    )
+    with pytest.raises(BudgetExhausted, match="Token"):
+        ledger.reserve_request("two", reserved_tokens=20)
+    assert ledger.counts()["model_requests"] == 1
+    ledger.close()
+
+
+def test_provider_token_overrun_is_persisted_not_hidden(tmp_path):
+    ledger = TrialLedger(
+        tmp_path / "overrun.sqlite",
+        BudgetLimits(max_model_requests=2, max_physics_evaluations=0, max_total_tokens=30),
+    )
+    ledger.reserve_request("one", reserved_tokens=20)
+    with pytest.raises(BudgetExhausted, match="overrun"):
+        ledger.finish_request(
+            "one",
+            ModelReply(
+                backend_alias="test",
+                model_id="fixture",
+                content="{}",
+                usage=TokenUsage(total_tokens=25),
+            ),
+        )
+    assert ledger.connection.execute("SELECT status,total_tokens FROM requests").fetchone() == (
+        "token_overrun",
+        25,
+    )
+    with pytest.raises(UnresolvedRequest):
+        ledger.reserve_request("one", reserved_tokens=20)
+    ledger.close()
+
+
+def test_actual_route_with_no_token_allocation_cannot_dispatch(tmp_path, study_fixture):
+    _, _, case = study_fixture
+    sent = []
+    ledger = TrialLedger(
+        tmp_path / "unallocated.sqlite",
+        BudgetLimits(max_model_requests=1, max_physics_evaluations=0),
+    )
+    with ModelAdapter(
+        BackendConfig(
+            kind="api",
+            alias="allocated-requests-only",
+            model_id="fixture",
+            model_revision="test-v1",
+            execution_authorized=True,
+            base_url="https://fixture.invalid/v1",
+        ),
+        api_key="unit-test-placeholder",
+        transport=httpx.MockTransport(lambda request: sent.append(request)),
+    ) as adapter:
+        with pytest.raises(BudgetExhausted, match="Token"):
+            request_model(adapter, ModelCall(view="structured", input=case.goal_input()), ledger)
+    assert not sent
+    assert ledger.counts()["model_requests"] == 0
+    ledger.close()

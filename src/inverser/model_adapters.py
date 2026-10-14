@@ -74,6 +74,7 @@ class ModelCall(Record):
                 {"ball_id": ball.ball_id, "kind": ball.kind, "status": ball.status}
                 for ball in initial.balls
             ]
+            data["initial_red_slot_order"] = "increasing x, then increasing y"
             if isinstance(self.input, GoalInput):
                 data.pop("goal")
                 data["goal_inventory"] = [
@@ -100,6 +101,7 @@ class BackendConfig(Record):
     base_url: str = Field(exclude=True, repr=False)
     execution_authorized: bool = False
     max_output_tokens: int = Field(default=1024, gt=0, le=8192)
+    request_token_reservation: int = Field(default=16384, gt=0)
 
     @model_validator(mode="after")
     def validate_endpoint(self) -> Self:
@@ -192,6 +194,8 @@ class ModelAdapter:
             raise ValueError("API credentials must be supplied at runtime")
         if config.kind != "mock" and config.model_revision == "unverified":
             raise ValueError("Actual backend execution needs a declared model revision")
+        if config.request_token_reservation < config.max_output_tokens:
+            raise ValueError("Token reservation must cover the configured output cap")
         if config.kind == "mock" and not isinstance(transport, httpx.MockTransport):
             raise ValueError("Mock backend requires an explicit mock transport")
         self.config = config
@@ -284,6 +288,26 @@ class ModelAdapter:
                     ball.status == "unobserved" for ball in frame.state.balls
                 ):
                     raise ValueError("Predicted frames must preserve every initial ball slot")
+            if {
+                ball.ball_id: ball.kind for ball in submission.resting_state.balls
+            } != expected_inventory or any(
+                ball.status == "unobserved" for ball in submission.resting_state.balls
+            ):
+                raise ValueError("Forward resting state must preserve every initial ball slot")
+            pockets = {circle.geometry_id for circle in call.input.physics.table.pockets}
+            cushions = {
+                segment.geometry_id for segment in call.input.physics.table.linear_cushions
+            } | {circle.geometry_id for circle in call.input.physics.table.circular_cushions}
+            for event in submission.events:
+                first, second = event.participants
+                if first not in expected_inventory:
+                    raise ValueError("Contact prediction has no initial ball slot")
+                if event.event_type == "ball_ball":
+                    valid = second in expected_inventory and first != second
+                else:
+                    valid = second in (pockets if event.event_type == "pocket" else cushions)
+                if not valid:
+                    raise ValueError("Contact prediction has unavailable ball/geometry")
         return ModelReply(
             backend_alias=self.config.alias,
             model_id=self.config.model_id,

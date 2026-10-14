@@ -123,6 +123,68 @@ def main() -> int:
     )
     study_dry.add_argument("--input", type=Path, required=True)
     study_dry.add_argument("--output", type=Path, required=True)
+    baseline_dry = commands.add_parser(
+        "baseline-dry-run",
+        help="Validate classical search and forecast metrics on one development fixture",
+    )
+    baseline_dry.add_argument("--input", type=Path, required=True)
+    baseline_dry.add_argument("--output", type=Path, required=True)
+    baseline_dry.add_argument("--objective-budget", type=int, default=8)
+    baseline_dry.add_argument("--candidates", type=int, default=4)
+    baseline_dry.add_argument("--seed", type=int, default=20261013)
+    baseline_dry.add_argument("--limit-jobs", type=int)
+    canvas_audit = commands.add_parser(
+        "audit-author-canvases",
+        help="Audit at most 16 native source canvases using two sampled frames per recording",
+    )
+    canvas_audit.add_argument("--episodes", type=Path, required=True)
+    canvas_audit.add_argument("--inventory", type=Path, required=True)
+    canvas_audit.add_argument("--output", type=Path, required=True)
+    canvas_audit.add_argument("--limit-recordings", type=int, default=16)
+    point_audit = commands.add_parser(
+        "audit-native-point-compatibility",
+        help="Check sampled detections against held-out native paths without refitting the mapping",
+    )
+    point_audit.add_argument("--mapping", type=Path, required=True)
+    point_audit.add_argument("--episodes", type=Path, required=True)
+    point_audit.add_argument("--output", type=Path, required=True)
+    semantic_qc = commands.add_parser(
+        "run-author-semantic-qc",
+        help="Compare five fixed CPU-only pipeline profiles on at most 16 author recordings",
+    )
+    semantic_qc.add_argument("--mapping", type=Path, required=True)
+    semantic_qc.add_argument("--episodes", type=Path, required=True)
+    semantic_qc.add_argument("--output", type=Path, required=True)
+    semantic_qc.add_argument("--workers", type=int, default=4)
+    semantic_qc.add_argument("--max-new-output-gb", type=float, default=20)
+    semantic_qc.add_argument("--limit-recordings", type=int)
+    semantic_qc.add_argument(
+        "--profile-suite",
+        choices=["initial_ablation", "cue_gap_no_background"],
+        default="initial_ablation",
+    )
+    analytics_audit = commands.add_parser(
+        "audit-billiards-analytics",
+        help="Audit acquired nine-ball layouts/trajectories without assuming cue or spin GT",
+    )
+    analytics_audit.add_argument("--dataset", type=Path, required=True)
+    analytics_audit.add_argument("--trajectories", type=Path)
+    analytics_audit.add_argument("--output", type=Path, required=True)
+    real_forecast = commands.add_parser(
+        "prepare-real-world-model-pilot",
+        help="Export source-annotated factual-prefix forecasts, not real action interventions",
+    )
+    real_forecast.add_argument("--trajectories", type=Path, required=True)
+    real_forecast.add_argument("--output", type=Path, required=True)
+    diagnostic_panel = commands.add_parser(
+        "prepare-diagnostic-panel",
+        help="Lock a small 64+64 development panel without model inference or formal-test claims",
+    )
+    diagnostic_panel.add_argument("--synthetic", type=Path, required=True)
+    diagnostic_panel.add_argument("--real-public", type=Path, required=True)
+    diagnostic_panel.add_argument("--real-private", type=Path, required=True)
+    diagnostic_panel.add_argument("--output", type=Path, required=True)
+    diagnostic_panel.add_argument("--seed", type=int, default=20261014)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if args.command in ("generate-pilot", "audit-pilot"):
@@ -243,6 +305,72 @@ def main() -> int:
         from inverser.evaluation import study_dry_run
 
         result = study_dry_run(args.input, args.output)
+    elif args.command == "baseline-dry-run":
+        from inverser.study_runner import EngineeringRunConfig, baseline_dry_run
+
+        result = baseline_dry_run(
+            args.input,
+            args.output,
+            EngineeringRunConfig(
+                seed=args.seed,
+                objective_budget=args.objective_budget,
+                candidate_count=args.candidates,
+            ),
+            limit_jobs=args.limit_jobs,
+        )
+    elif args.command == "audit-author-canvases":
+        import cv2
+
+        from inverser.canvas_audit import audit_author_canvases
+
+        cv2.setNumThreads(1)
+        report = audit_author_canvases(
+            args.episodes,
+            args.inventory,
+            args.output,
+            limit_recordings=args.limit_recordings,
+        )
+        result = report.model_dump(mode="json", exclude={"recordings"})
+    elif args.command == "audit-native-point-compatibility":
+        import cv2
+
+        from inverser.canvas_audit import audit_registered_points
+
+        cv2.setNumThreads(1)
+        point_report = audit_registered_points(args.mapping, args.episodes, args.output)
+        result = point_report.model_dump(mode="json", exclude={"rows"})
+    elif args.command == "run-author-semantic-qc":
+        from inverser.semantic_qc import SemanticQCConfig, run_semantic_qc
+
+        result = run_semantic_qc(
+            args.mapping,
+            args.episodes,
+            args.output,
+            SemanticQCConfig(
+                workers=args.workers,
+                max_new_output_bytes=int(args.max_new_output_gb * 1_000_000_000),
+                profile_suite=args.profile_suite,
+            ),
+            limit_recordings=args.limit_recordings,
+        )
+    elif args.command == "audit-billiards-analytics":
+        from inverser.analytics_data import audit_analytics_data
+
+        result = audit_analytics_data(args.dataset, args.output, args.trajectories)
+    elif args.command == "prepare-real-world-model-pilot":
+        from inverser.world_model_data import build_factual_forecast_pilot
+
+        result = build_factual_forecast_pilot(args.trajectories, args.output)
+    elif args.command == "prepare-diagnostic-panel":
+        from inverser.diagnostic_panel import DiagnosticPanelConfig, prepare_diagnostic_panel
+
+        result = prepare_diagnostic_panel(
+            args.synthetic,
+            args.real_public,
+            args.real_private,
+            args.output,
+            DiagnosticPanelConfig(seed=args.seed),
+        )
     else:
         from inverser.preview import render_preview
 

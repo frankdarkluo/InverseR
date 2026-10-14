@@ -2,9 +2,18 @@ from typing import Literal, Self
 
 from pydantic import Field, model_validator
 
-from inverser.physics import SnookerSimulator, sample_event_motion
+from inverser.physics import Replay, SnookerSimulator, sample_event_motion
 from inverser.runtime import fingerprint
-from inverser.schemas import CueAction, Layout, MotionSample, Record, ShotRecord
+from inverser.schemas import (
+    BallPosition,
+    ContactEvent,
+    CueAction,
+    Layout,
+    MotionSample,
+    PhysicsConfig,
+    Record,
+    ShotRecord,
+)
 
 DYNAMIC_PARAMETERS = (
     "ball_mass_kg",
@@ -132,6 +141,36 @@ class ForwardSubmission(Record):
         return self
 
 
+class CandidateAction(Record):
+    candidate_id: str = Field(min_length=1)
+    action: CueAction
+
+
+class ActionBank(Record):
+    schema_version: Literal["study-action-bank-v1"] = "study-action-bank-v1"
+    case_id: str
+    seed: int = Field(ge=0)
+    sampling_prior: Literal["sobol_uniform_azimuth_speed_contact_disk"] = (
+        "sobol_uniform_azimuth_speed_contact_disk"
+    )
+    min_cue_speed_mps: float = Field(gt=0)
+    max_cue_speed_mps: float = Field(gt=0, le=3)
+    candidates: tuple[CandidateAction, ...] = Field(min_length=1, max_length=32)
+
+    @model_validator(mode="after")
+    def validate_bank(self) -> Self:
+        if self.min_cue_speed_mps >= self.max_cue_speed_mps:
+            raise ValueError("Bank speed bounds must form a nonempty interval")
+        if len({candidate.candidate_id for candidate in self.candidates}) != len(self.candidates):
+            raise ValueError("Candidate IDs must be unique")
+        if any(
+            not self.min_cue_speed_mps <= candidate.action.cue_speed_mps <= self.max_cue_speed_mps
+            for candidate in self.candidates
+        ):
+            raise ValueError("Candidate action violates the declared bank speed prior")
+        return self
+
+
 def _initial_slots(initial: Layout) -> dict[str, str]:
     public = initial.endpoint_view()
     return {
@@ -142,6 +181,101 @@ def _initial_slots(initial: Layout) -> dict[str, str]:
         )
         for ball in initial.balls
     }
+
+
+def semantic_contacts(
+    initial: Layout, events: tuple[ContactEvent, ...]
+) -> tuple[SemanticContact, ...]:
+    types = {
+        "ball_ball": "ball_ball",
+        "ball_linear_cushion": "cushion",
+        "ball_circular_cushion": "cushion",
+        "ball_pocket": "pocket",
+    }
+    excluded = {
+        "none",
+        "stick_ball",
+        "spinning_stationary",
+        "rolling_stationary",
+        "rolling_spinning",
+        "sliding_rolling",
+    }
+    slots = _initial_slots(initial)
+    contacts = []
+    for event in events:
+        if event.event_type in excluded:
+            continue
+        if event.event_type not in types or len(event.agents) != 2:
+            raise ValueError("Unsupported raw event cannot be silently treated as contact GT")
+        first, second = event.agents
+        if first not in slots:
+            raise ValueError("Contact event has no initial ball identity")
+        if event.event_type == "ball_ball" and second not in slots:
+            raise ValueError("Ball contact has an unknown second ball")
+        participants = (
+            (slots[first], slots[second])
+            if event.event_type == "ball_ball"
+            else (slots[first], second)
+        )
+        contacts.append(
+            SemanticContact.model_validate(
+                {
+                    "event_type": types[event.event_type],
+                    "time_s": event.time_s,
+                    "participants": participants,
+                }
+            )
+        )
+    return tuple(contacts)
+
+
+def replay_forward_truth(
+    initial: Layout, replay: Replay, config: PhysicsConfig, sample_times_s: tuple[float, ...]
+) -> ForwardSubmission:
+    slots = _initial_slots(initial)
+    kinds = {slots[ball.ball_id]: ball.kind for ball in initial.balls}
+    samples = sample_event_motion(replay.motion, config, sample_times_s)
+    return ForwardSubmission(
+        frames=tuple(
+            PredictedFrame(
+                time_s=time,
+                state=Layout(
+                    balls=tuple(
+                        BallPosition(
+                            ball_id=slots[point.ball_id],
+                            kind=kinds[slots[point.ball_id]],
+                            status="pocketed" if point.motion_state == 4 else "on_table",
+                            xy_m=None if point.motion_state == 4 else point.position_m[:2],
+                        )
+                        for point in samples
+                        if point.time_s == time
+                    )
+                ),
+            )
+            for time in sample_times_s
+        ),
+        resting_state=Layout(
+            balls=tuple(
+                ball.model_copy(update={"ball_id": slots[ball.ball_id]})
+                for ball in replay.goal.balls
+            )
+        ),
+        events=semantic_contacts(initial, replay.events),
+    )
+
+
+def translating_ball_ids(initial: Layout, motion: tuple[MotionSample, ...]) -> tuple[str, ...]:
+    slots = _initial_slots(initial)
+    return tuple(
+        sorted(
+            {
+                slots[point.ball_id]
+                for point in motion
+                if any(abs(component) > 1e-9 for component in point.velocity_mps[:2])
+                or point.motion_state == 4
+            }
+        )
+    )
 
 
 class StudyCase(Record):
@@ -177,46 +311,25 @@ class StudyCase(Record):
         slots = _initial_slots(self.private_record.initial)
         return tuple(point.model_copy(update={"ball_id": slots[point.ball_id]}) for point in motion)
 
+    def forward_truth(self, sample_times_s: tuple[float, ...]) -> ForwardSubmission:
+        record = self.private_record
+        replay = Replay(
+            record.goal,
+            record.duration_s,
+            record.events,
+            record.event_sampled_motion,
+            record.cue_initial_velocity_mps,
+            record.cue_initial_angular_velocity_radps,
+        )
+        return replay_forward_truth(record.initial, replay, record.physics, sample_times_s)
+
+    def moving_ball_ids(self) -> tuple[str, ...]:
+        return translating_ball_ids(
+            self.private_record.initial, self.private_record.event_sampled_motion
+        )
+
     def semantic_contacts(self) -> tuple[SemanticContact, ...]:
-        types = {
-            "ball_ball": "ball_ball",
-            "ball_linear_cushion": "cushion",
-            "ball_circular_cushion": "cushion",
-            "ball_pocket": "pocket",
-        }
-        excluded = {
-            "none",
-            "stick_ball",
-            "spinning_stationary",
-            "rolling_stationary",
-            "rolling_spinning",
-            "sliding_rolling",
-        }
-        slots = _initial_slots(self.private_record.initial)
-        contacts = []
-        for event in self.private_record.events:
-            if event.event_type in excluded:
-                continue
-            if event.event_type not in types or len(event.agents) != 2:
-                raise ValueError("Unsupported raw event cannot be silently treated as contact GT")
-            first, second = event.agents
-            if first not in slots:
-                raise ValueError("Contact event has no initial ball identity")
-            participants = (
-                (slots[first], slots[second])
-                if event.event_type == "ball_ball"
-                else (slots[first], second)
-            )
-            contacts.append(
-                SemanticContact.model_validate(
-                    {
-                        "event_type": types[event.event_type],
-                        "time_s": event.time_s,
-                        "participants": participants,
-                    }
-                )
-            )
-        return tuple(contacts)
+        return semantic_contacts(self.private_record.initial, self.private_record.events)
 
 
 def public_physics(

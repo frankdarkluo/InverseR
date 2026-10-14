@@ -181,6 +181,26 @@ def classify_hsv(h: float, s: float, v: float) -> ObservedKind:
     return "unknown"
 
 
+def classify_author_snooker_hsv(h: float, s: float, v: float) -> ObservedKind:
+    if v < 60:
+        return "black"
+    if s < 55 and v > 145:
+        return "cue"
+    if (h >= 130 or h < 13) and s >= 180 and v >= 100:
+        return "red"
+    if (h >= 145 or h < 13) and 55 <= s < 180 and v >= 190:
+        return "pink"
+    if 18 <= h <= 35 and v > 150:
+        return "yellow"
+    if 0 <= h <= 50 and s < 150 and 60 <= v <= 180:
+        return "brown"
+    if 80 <= h < 100 and s >= 150:
+        return "green"
+    if 100 <= h <= 140 and s >= 150:
+        return "blue"
+    return "unknown"
+
+
 def representative_hsv(colors: NDArray[np.uint8]) -> tuple[float, float, float]:
     saturation = float(np.median(colors[:, 1]))
     value = float(np.median(colors[:, 2]))
@@ -199,14 +219,31 @@ def representative_hsv(colors: NDArray[np.uint8]) -> tuple[float, float, float]:
 
 
 def detect_balls(
-    rectified: ImageArray, projection: TableProjection, *, native_image: bool = False
+    rectified: ImageArray,
+    projection: TableProjection,
+    *,
+    native_image: bool = False,
+    colour_profile: Literal["default", "author_snooker"] = "default",
+    background: ImageArray | None = None,
+    background_threshold: int = 24,
+    compact_cue_recovery: bool = False,
 ) -> tuple[tuple[Detection, ...], float, float, int]:
+    if colour_profile not in ("default", "author_snooker"):
+        raise ValueError("Unknown detector colour profile")
+    if not 1 <= background_threshold <= 255:
+        raise ValueError("Background threshold must be an 8-bit positive contrast")
+    if background is not None and background.shape != rectified.shape:
+        raise ValueError("Background and observed image must share the same coordinate canvas")
+    if compact_cue_recovery and (not native_image or colour_profile != "author_snooker"):
+        raise ValueError("Compact cue recovery requires native author-snooker colour evidence")
     offset_x = offset_y = 0
     mask = projection.source_interior if native_image else projection.interior
     if native_image:
         offset_x, offset_y, right, bottom = projection.source_bounds
         rectified = rectified[offset_y:bottom, offset_x:right]
         mask = mask[offset_y:bottom, offset_x:right]
+        if background is not None:
+            background = background[offset_y:bottom, offset_x:right]
     hsv = np.asarray(cv2.cvtColor(rectified, cv2.COLOR_BGR2HSV), dtype=np.uint8)
     h, s, v = (hsv[:, :, index].astype(np.float32) for index in range(3))
     interior = mask.astype(bool)
@@ -216,9 +253,14 @@ def detect_balls(
         return (), felt_fraction, 1.0, 0
     median = np.median(hsv[felt], axis=0)
     hue_distance = np.minimum(np.abs(h - median[0]), 180 - np.abs(h - median[0]))
-    foreground = (
-        (hue_distance > 12) | (s < 60) | (v < 0.25 * median[2]) | (s > median[1] + 50)
-    ) & interior
+    if background is None:
+        foreground = (
+            (hue_distance > 12) | (s < 60) | (v < 0.25 * median[2]) | (s > median[1] + 50)
+        ) & interior
+    else:
+        foreground = (
+            np.max(cv2.absdiff(rectified, background), axis=2) >= background_threshold
+        ) & interior
     binary = foreground.astype(np.uint8) * 255
     binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN, np.ones((3, 3), np.uint8))
     contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -263,7 +305,10 @@ def detect_balls(
                 local_radius,
             )
             continue
-        kind = classify_hsv(*representative_hsv(colors))
+        classifier = (
+            classify_author_snooker_hsv if colour_profile == "author_snooker" else classify_hsv
+        )
+        kind = classifier(*representative_hsv(colors))
         bev_x, bev_y = (
             projection.source_to_bev(center_x + offset_x, center_y + offset_y)
             if native_image
@@ -278,6 +323,54 @@ def detect_balls(
                 radius_ratio=float(math.sqrt(area / reference_area)),
             )
         )
+    if compact_cue_recovery:
+        white = ((s < 55) & (v > 145) & interior).astype(np.uint8)
+        component_count, labels = cv2.connectedComponents(white, connectivity=8)
+        distance = cv2.distanceTransform(white, cv2.DIST_L2, cv2.DIST_MASK_PRECISE)
+        for component in range(1, component_count):
+            component_mask = labels == component
+            peak = float(np.max(distance[component_mask]))
+            if peak < 2:
+                continue
+            maximum_y, maximum_x = np.unravel_index(
+                np.argmax(np.where(component_mask, distance, -1)), distance.shape
+            )
+            local_radius = projection.source_ball_radius(
+                float(maximum_x + offset_x), float(maximum_y + offset_y)
+            )
+            if not 0.45 * local_radius <= peak <= 1.5 * local_radius:
+                continue
+            core_y, core_x = np.nonzero(component_mask & (distance >= 0.8 * peak))
+            if not len(core_x):
+                unresolved += 1
+                continue
+            center_x = float(np.mean(core_x))
+            center_y = float(np.mean(core_y))
+            component_width = int(np.ptp(core_x)) + 1
+            component_height = int(np.ptp(core_y)) + 1
+            if max(component_width, component_height) > 3 * local_radius:
+                unresolved += 1
+                continue
+            bev_x, bev_y = projection.source_to_bev(center_x + offset_x, center_y + offset_y)
+            cue_xy = projection.xy_m(bev_x, bev_y)
+            near = [
+                old
+                for old in detections
+                if math.dist(old.xy_m, cue_xy) < projection.physics.ball_radius_m
+            ]
+            if near:
+                if any(old.kind != "cue" for old in near):
+                    unresolved += 1
+                continue
+            detections.append(
+                Detection(
+                    kind="cue",
+                    xy_m=cue_xy,
+                    center_px=(bev_x, bev_y),
+                    shape_score=min(0.75, peak / local_radius),
+                    radius_ratio=peak / local_radius,
+                )
+            )
     return (
         tuple(sorted(detections, key=lambda detection: detection.center_px)),
         felt_fraction,
@@ -347,15 +440,129 @@ class BallAssociator:
         )
 
 
+class GapAwareBallAssociator(BallAssociator):
+    def __init__(self, *, max_gap_s: float = 0.15, ambiguity_margin_m: float = 0.01275) -> None:
+        super().__init__()
+        if not 0 < max_gap_s <= 0.5 or not 0 < ambiguity_margin_m < 0.1:
+            raise ValueError("Temporal association requires bounded gap and ambiguity thresholds")
+        self.max_gap_s = max_gap_s
+        self.ambiguity_margin_m = ambiguity_margin_m
+        self.memory: dict[str, tuple[Detection, float, tuple[float, float]]] = {}
+        self.ambiguous_matches = 0
+
+    def update(
+        self, detections: tuple[Detection, ...], time_s: float
+    ) -> tuple[tuple[Detection, ...], float | None, float | None, bool]:
+        from dataclasses import replace
+
+        if self.previous_time is not None and time_s <= self.previous_time:
+            raise ValueError("Observation timestamps must increase")
+        active = [
+            (track_id, old, timestamp, velocity)
+            for track_id, (old, timestamp, velocity) in sorted(self.memory.items())
+            if 0 < time_s - timestamp <= self.max_gap_s + 1e-12
+        ]
+        matched: dict[int, str] = {}
+        displacements = []
+        self.cue_motion_m = None
+        self.ambiguous_matches = 0
+        if active and detections:
+            cost = np.full((len(active), len(detections)), 1e6, dtype=float)
+            for i, (_, old, timestamp, velocity) in enumerate(active):
+                dt = time_s - timestamp
+                predicted = (old.xy_m[0] + velocity[0] * dt, old.xy_m[1] + velocity[1] * dt)
+                gate = min(0.6, 3 * dt + 0.01)
+                for j, new in enumerate(detections):
+                    compatible = old.kind == new.kind or "unknown" in (old.kind, new.kind)
+                    distance = math.dist(old.xy_m, new.xy_m)
+                    if compatible and distance <= gate:
+                        residual = math.dist(predicted, new.xy_m)
+                        cost[i, j] = residual + (
+                            self.ambiguity_margin_m if old.kind != new.kind else 0
+                        )
+            old_indices, new_indices = linear_sum_assignment(cost)
+            for i, j in zip(old_indices, new_indices, strict=True):
+                value = cost[i, j]
+                if value >= 1e6:
+                    continue
+                row_alternatives = np.delete(cost[i], j)
+                column_alternatives = np.delete(cost[:, j], i)
+                if (
+                    len(row_alternatives)
+                    and np.min(row_alternatives) - value < self.ambiguity_margin_m
+                ) or (
+                    len(column_alternatives)
+                    and np.min(column_alternatives) - value < self.ambiguity_margin_m
+                ):
+                    self.ambiguous_matches += 1
+                    continue
+                track_id, old, _, _ = active[i]
+                matched[int(j)] = track_id
+                distance = math.dist(old.xy_m, detections[j].xy_m)
+                displacements.append(distance)
+                if old.kind == detections[j].kind == "cue":
+                    self.cue_motion_m = distance
+        tracked = []
+        new_memory = {
+            track_id: value
+            for track_id, value in self.memory.items()
+            if time_s - value[1] <= self.max_gap_s + 1e-12
+        }
+        for index, detection in enumerate(detections):
+            track_id = matched.get(index)
+            velocity = (0.0, 0.0)
+            if track_id is None:
+                track_id = f"track_{self.next_id:05d}"
+                self.next_id += 1
+            else:
+                old, timestamp, _ = self.memory[track_id]
+                dt = time_s - timestamp
+                velocity = (
+                    (detection.xy_m[0] - old.xy_m[0]) / dt,
+                    (detection.xy_m[1] - old.xy_m[1]) / dt,
+                )
+            observed = replace(detection, track_id=track_id)
+            tracked.append(observed)
+            new_memory[track_id] = observed, time_s, velocity
+        changed = (
+            len(matched) != len(self.previous)
+            or len(matched) != len(detections)
+            or self.previous_time is None
+        )
+        self.memory = new_memory
+        self.previous = tuple(tracked)
+        self.previous_time = time_s
+        self.matched_ball_count = len(matched)
+        return (
+            self.previous,
+            max(displacements) if displacements else None,
+            float(np.median(displacements)) if displacements else None,
+            changed,
+        )
+
+
 def observe_frame(
     frame: ImageArray,
     projection: TableProjection,
     associator: BallAssociator,
     time_s: float,
+    *,
+    colour_profile: Literal["default", "author_snooker"] = "default",
+    background: ImageArray | None = None,
+    background_threshold: int = 24,
+    compact_cue_recovery: bool = False,
 ) -> tuple[FrameObservation, ImageArray]:
     rectified = projection.warp(frame)
     # A plane homography stretches sphere silhouettes; detect in the source image first.
-    balls, felt, clutter, unresolved = detect_balls(frame, projection, native_image=True)
+    balls, felt, clutter, unresolved = detect_balls(
+        frame,
+        projection,
+        native_image=True,
+        colour_profile=colour_profile,
+        background=background,
+        background_threshold=background_threshold,
+        compact_cue_recovery=compact_cue_recovery,
+    )
     tracked, maximum, median, changed = associator.update(balls, time_s)
     camera_motion = (
         median is not None and len(balls) >= 5 and median > 0.5 * projection.physics.ball_radius_m

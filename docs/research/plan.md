@@ -6,7 +6,9 @@ Status: initial setup and raw-data engineering were approved and executed.
 The current empirical-study supplement was approved for staged preparation.
 It does not authorize model jobs, serving installation or data expansion before
 their per-route resources and research gates are confirmed.
-G1-G4 have not been passed; formal model experiments remain unexecuted.
+G1 has been accepted for the limited layered development-study scope. The small
+diagnostic panel is locked, but formal G2/G4 freeze, method/training and model
+GPU/API allocations remain unapproved. Formal model experiments are unexecuted.
 
 The active next-stage plan is [Section 13](#13-active-empirical-study-plan).
 It supersedes conflicting earlier resource and million-scale assumptions:
@@ -15,8 +17,9 @@ It supersedes conflicting earlier resource and million-scale assumptions:
   and inference-only diagnostics before any new training.
 - APIs may receive self-generated synthetic states/images only; real recordings
   and manual annotations remain local.
-- GPU, CPU, storage and API allocations need reconfirmation. Historical caps
-  below do not authorize current consumption.
+- CPU-only quality pilots now have explicit allocation: at most four workers,
+  20 GB new artifacts and 1 TB total project storage. GPU/API remain disabled;
+  their historical caps are not renewed authorization.
 - Preparation, compatibility checks, development diagnosis and formal evaluation
   are separate stages with explicit approvals, not one automatic full sweep.
 
@@ -307,8 +310,8 @@ The assistant executes approved engineering and research-support work; the resea
 | Closed models | Later compare requested GPT-5.5 and GPT-6.1 Sol deployments if the existing API actually exposes them and supports the required image inputs. Never silently substitute a model. |
 | API cap | Pending reconfirmation for the current stage. Require a positive per-model request/token cap before paid calls; probes, retries and loops are included. The earlier 100-request allowance is historical, not renewed approval. |
 | GPU allocation | Pending explicit permitted UUIDs and allocation. Historical ceiling was two idle A100 80GB devices. Do not load weights, stop or preempt jobs based on apparent idleness alone. |
-| CPU/network allocation | Pending reconfirmation for actual experiment jobs. Historical limits were 16 CPU workers and four downloads; this plan requires no new media download. |
-| Storage | Pending a confirmed experiment/storage reservation. Historical project ceiling was 1 TB. Reuse existing shared weights read-only, never duplicate them by default. |
+| CPU/network allocation | Current quality-pilot approval: at most four CPU workers. No new media download is authorized by default; public source-page checks are separate from dataset acquisition. |
+| Storage | Current quality-pilot approval: at most 20 GB new artifacts and 1 TB total project storage. Reuse shared weights read-only; never duplicate them by default. |
 | Autonomy | Automatic execution within a stage. Wait for approval at data quality, benchmark freeze, method selection and formal evaluation. |
 | Paper positioning | Choose the main contribution after diagnostic evidence, rather than precommitting to a positive method result. |
 | Publication | No automatic data release, upload, email outreach, manuscript submission or simultaneous submission. |
@@ -783,7 +786,158 @@ Initial implementation authorization covers the setup and quality-pilot prerequi
 
 ## 13. Active empirical-study plan
 
+### Preparation checkpoint
+
+The approved preparation stage now implements safe forward/goal views, masked
+physics, metric paired rendering, regular-time physical labels, semantic contacts,
+typed mocked HTTP transport and durable request/token/physics accounting.
+Independent spatial-mapping validation is available without promoting real
+observations to action, timed-trajectory or metric-world GT.
+
+The repository documentation is organized under `docs/research`, `docs/benchmark`,
+`docs/data` and `docs/pipelines`; this file mirrors the session plan with
+context-correct links. PDFs and source payloads remain in place.
+
+Validation: 127 tests passed, Ruff passed and Mypy passed for 27 source files.
+The persistent `study-preparation-smoke-v2` fixture produced both input forms,
+two cached mock requests and two scored reference evaluations. Its witness
+response is explicitly engineering-only: actual model inference/API billing
+and performance claims are zero. No GPU, server, training or bulk processing ran.
+
+Actual runtime adapters, 100+370 reprocessing and dataset/evaluation expansion
+remain blocked on their explicit resources and research gates. The audited
+pre-implementation gap table below is historical; implemented surfaces are
+documented in [study preparation](../benchmark/study_preparation.md).
+
 ### 13.1 已确认范围与未确认资源
+
+#### G1 scope accepted and small development panel locked
+
+研究者明确接受“受控 snooker 主任务＋真实 BSA factual validation＋弱观察感知/案例”
+分层范围，并授权准备 64+64 开发面板。G1 对这个限定范围已接受，不代表真实动作/状态
+获得 Gold，也不默认启动 GPU/API、训练、数据发布或正式盲测。
+
+`data/research/model-diagnostic-panel-v1/` 已实际锁定：64 个不同仿真 layout/source
+group（四个 family 各16），每布局2个 blind-forward 动作＋1个 goal ×
+structured/BEV，共384请求；64个不同source-round真实prefix case仅本地，共448。
+8个仿真布局的48请求API共同子集预选，但费用/模型额度尚未授权。
+
+128 次 CPU reference replay 验证基础 witness 和单变量动作干预，future/events
+隐藏，public/images/private 与协议、来源、producer、runtime/resolved physics
+hash锁定。重跑不新增生成，面板约8.3MB。187测试、Ruff、Mypy35文件通过。
+
+详见[小面板协议](model_diagnostic_panel.md)。真实prefix的local-only adapter仍待
+接入；当前只有数据/合同就绪，没有“已完成模型推理”。下一项只需明确本地GPU
+索引/UUID/容量与推理环境许可，或API实际deployment、vision能力与request/token
+上限；既有CPU4worker/20GB/1TB额度不重复确认。正式G2/G4另行冻结。
+
+#### BSA acquisition and world-model readiness checkpoint
+
+研究者批准获取 Billiards Sports Analytics 并继续颜色修复、母球/近邻与无共享
+背景的关联诊断，要求保持 world-model empirical study 主线。本轮没有转成
+tracking 方法论文，没有运行下载包中的代码/权重或任何 LLM/GPU/API。
+
+`data/BilliardsSportsAnalytics/` 已获取原 Dropbox 293,325,698-byte ZIP、
+内嵌布局发布包（3,850 个源文件）及完整公开 Google 计划 3,100 个文件
+（2,082 XML、1,018 XLSX）。逐文件 receipts/hash、ZIP CRC 与安全路径检查通过，
+源获取约 981 MB；元数据客户端问题通过普通匿名下载确认与检查点恢复解决，
+没有认证绕过、YouTube 下载或许可证推断。
+
+实际标签审计：2,964 个静态布局（2,913 个精确文件 hash）、298 match 路径组、
+94 tournament、298 个有效变量表。轨迹有声明的 cm/time：2,080 个可用类型记录、
+143,792 个点；两个原生 px 轨迹保留、不臆测比例转成 cm。2,082 个轨迹文件
+不是 2,082 次独立击球；完整场景、实测 cue/spin 和独立标定仍不可用。
+
+旧数据 16 录制无背景消融完成（14 开发组、6,097 帧）：母球像素恢复使 cue
+未解决帧 23.91%→17.28%，点盘 IoU 58.17%→58.87%；不填缺失位置。
+仅关联即可使新轨迹/100帧 93.17→24.96，但没有独立 ID 准确率。原始来源和
+v1不改写，v2完成后复用新增0处理。
+
+world-model 证据链明确分三条：controlled snooker action-conditioned
+prediction/intervention；prediction→ranking→goal utility 与 tool attribution；
+单独的真实 nine-ball factual validation。已导出1,053个去重后可用轨迹case、
+180个source-round组的10点prefix/隐藏future（0.25/0.5/1s），非1,053次独立击球。
+静态/匀速参考 mean query error 为25.99/42.10 source-declared cm，
+不是learned world model结果或真实控制精度。
+
+数据与主线分别见[BSA说明](../data/billiards_sports_analytics.md)、
+[cue/gap消融](../pipelines/cue_gap_qc.md)及
+[世界模型数据衔接](world_model_data_bridge.md)。183测试、Ruff、Mypy
+（34source files）通过。当前准备不再无界打磨tracking；下一步应取得数据
+范围/G1决策，冻结小型model panel与信息/预算条件，再明确GPU/API并做backend
+smoke和实质RQ比较。G1-G4未自动通过，没有训练或百万扩建。
+
+#### Approved CPU semantic-QC checkpoint
+
+研究者明确批准本阶段 CPU-only 额度：最多 4 worker、20 GB 新产物、项目总量
+不超过 1 TB，暂不提供人工复核。GPU 与付费 API 保持关闭；旧“所有资源未确认”
+的描述仅为历史记录，不再阻塞这一已批准的 CPU 路线。
+
+已实际完成 16 个作者录制的 native-fps 五条件消融，2 个 support /14 个开发
+检查组，共 6,609 原始帧（表格评价为 6,097 帧），失败 0。配置在开发组处理前
+冻结。重复运行新增录制 0，原始数据和旧观察不变；新产物约 125 MB。
+
+只修来源颜色：unknown 检测占比 27.80%→2.41%，唯一色球重复冲突帧
+67.99%→19.69%；平均检测数、位置及主协议路径 mask 不变。路径 IoU
+58.17% 不变是颜色无关指标的预期结果，不是独立的颜色准确率结论。
+
+共享背景没有支持空间收益：IoU 58.13%，相对旧版差 −0.04 个百分点，
+录制组配对 bootstrap 95% 区间 [−1.81,+1.50]。空间覆盖下降、cue 未解决
+与 unresolved-component 比例增加，负面结果保留。短缺帧关联减少轨迹碎片，
+但没有独立 ID 标签，不能声称身份准确率提升。
+
+追加 exploratory 渲染诊断表明同一观测画成相邻线段后，旧版 IoU 为71.12%，
+颜色版为73.96%；保留原主表，不将连线像素作为新增观测或物理时间 GT。
+统计和备选资源均见[实测报告](../pipelines/semantic_qc_pilot.md)。
+
+172 个测试、Ruff、Mypy（32 source files）通过。尚未通过 G1-G4、训练、
+调用模型或扩建。下一轮建议保留颜色修复，单独测试不使用共享背景的短缺帧
+关联与 cue/模糊/近邻球漏观测；先向研究者展示当前表格，等待方向确认。
+
+#### Autoresearch source-QC checkpoint
+
+已进入实际源数据的有限 autoresearch，而非继续以 mock 代替数据质量证据。
+新增 native-canvas/source-render 配准及 frozen-map 点兼容性审计。最终结果见
+[native canvas 报告](../pipelines/native_canvas_audit.md)。
+
+H-QC1“共用同一个 crop”被本地证据否定：16 个原始录制有三种 native
+canvas/origin 配置；每录制首帧校准、中间帧验证均通过（32 对抽样图），offset
+复查差异为 0 px。它是像素 crop 一致性，不是物理误差为零或免校准跨桌泛化。
+
+H-QC2“空间覆盖足以验收状态”也不成立：14 个 policy-check 录制的 28 帧中，
+468 个已检测点全部位于人工 path union 内，但全部帧有语义/库存冲突
+（unknown 28 帧、multiple-blue 19 帧、cue 未解决 9 帧）。共享 crop 对照
+也得到相同覆盖率，不能把该粗分数写成完整 recall、颜色、身份或时间准确率。
+
+人工路径未用于拟合变换，原始来源与旧观察不变；165 个测试、Ruff、Mypy
+（31 source files）通过。新增产物只是小型数字审计报告。CPU 批量额度仍未
+取得，未重处理完整视频、启动模型/API/GPU、训练、扩建或自动通过 G1-G4。
+
+下一项研究工作聚焦 source-specific 颜色与身份/库存 QC；必须保留 unknown、
+遮挡和观测缺失，不得强行凑齐球或将算法输出升格为实测 GT。正式的 100+370
+重处理与研究者 G1 决策仍按资源和质量前置推进。
+
+#### Classical/diagnostic preparation checkpoint
+
+已继续实现 P1/E0 所需的 classical 与诊断链路：random、Sobol、几何初始化＋
+预算受控的 Powell；运动/静止球分列误差、初始 slot 身份、接触与 tie/order、
+动作干预响应、有限 bank 排序/regret 和 source/layout-grouped paired bootstrap。
+旧 endpoint 主评分和 pilot development partition 保持不变。
+
+新增 `baseline-dry-run` 只使用一个已有开发布局；目标不给 blind forecaster，
+bank 候选来自独立动作 prior。预测响应是显式 reference mock，不是模型结果。
+搜索、隐藏 judge 和 offline GT 使用不同的 cache 身份/成本角色；已完成 job
+有 manifest 和 checksum，支持崩溃后复用已完成计算，不重做已消耗查询。
+
+验证：157 个测试、Ruff、Mypy（30 个 source file）通过。持久化 CLI 已完成
+partial → resume → repeat：17 次 search、3 次隐藏 judge、4 次 offline bank
+reference、8 次 mock 请求；完成后的 repeat 新增 job 和查询均为零，产物
+hash 不变。仅为软件/开发 fixture 证据，不报告为模型性能或正式 baseline 成绩。
+
+本阶段没有获得新的资源额度，未启动批量 100+370 重处理、模型/API、GPU、
+训练或 benchmark 扩建，G1–G4 未通过。下一项实际数据工作仍是独立核查 manual
+canvas 映射并做有明确 CPU/storage 上限的质量 pilot；之后再确认 model route
+和冻结开发诊断协议。完整命令与边界见[实验准备说明](../benchmark/study_preparation.md)。
 
 本轮目标是制定可逐阶段执行的方案，围绕“物理预测是否帮助可执行的 goal-conditioned planning”形成 empirical study。主任务仍是 snooker 单杆、初始台面与目标终态到任意可行击球，不要求复现历史人类动作。
 
@@ -794,7 +948,7 @@ Initial implementation authorization covers the setup and quality-pilot prerequi
 | 输入 | 结构化状态与 BEV 图像配对；真实视频为独立观察验证 |
 | 第一轮 | 已有模型 inference 与经典搜索，不训练新的 world model，不微调大模型 |
 | API 数据 | 仅自生成合成状态与 BEV；真实录制和人工标签不外发 |
-| 资源 | 当前额度未确定；本方案不假定 GPU、API 或存储已获分配 |
+| 资源 | CPU-only QC 已批准：4 worker、20 GB 新产物、1 TB 项目总量；GPU/API 关闭 |
 | 方法 | 先诊断，后决定 companion method；不预设必须提出新算法 |
 | 规模 | 百万为长期扩建选项，不是小型实证或首篇文章的先决条件 |
 
@@ -804,7 +958,8 @@ Initial implementation authorization covers the setup and quality-pilot prerequi
 
 资源确认按 route 记录：可以先确认 CPU/storage 并将 API/GPU 禁用，
 不要求所有资源同时具备。Detector/renderer/client 的代码准备可先推进；
-100+370 的实际重处理等待 CPU/storage 额度，模型路线等待自己的额度。
+CPU-only 小型 QC 额度已确认；100+370 的后续范围等待本轮结果与研究者决策，
+模型路线等待自己的 GPU/API 额度。
 
 ### 13.2 研究参考与可借鉴的证据逻辑
 

@@ -5,7 +5,7 @@ from pydantic import ValidationError
 
 from inverser.physics import sample_event_motion
 from inverser.preview import render_layout
-from inverser.schemas import BallPosition, CueAction, Layout
+from inverser.schemas import BallPosition, ContactEvent, CueAction, Layout
 from inverser.study import GoalSubmission, make_study_case
 
 
@@ -92,3 +92,20 @@ def test_endpoint_red_ids_remain_local():
     ]
     with pytest.raises(ValidationError):
         CueAction(azimuth_deg=90, cue_speed_mps=0.5, tip_side=0.5, tip_vertical=0.5)
+
+
+def test_semantic_events_exclude_solver_transitions_and_surface_unknowns(study_fixture):
+    _, record, case = study_fixture
+    assert case.semantic_contacts() == ()
+    contact = ContactEvent(time_s=0.4, event_type="ball_linear_cushion", agents=("cue", "3"))
+    updated = case.model_copy(
+        update={"private_record": record.model_copy(update={"events": (contact,)})}
+    )
+    assert updated.semantic_contacts()[0].participants == ("cue", "3")
+    assert updated.semantic_contacts()[0].event_type == "cushion"
+    bad = ContactEvent(time_s=0.4, event_type="unverified_event", agents=("cue", "3"))
+    updated = case.model_copy(
+        update={"private_record": record.model_copy(update={"events": (bad,)})}
+    )
+    with pytest.raises(ValueError, match="Unsupported raw event"):
+        updated.semantic_contacts()

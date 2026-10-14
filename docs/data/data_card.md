@@ -2,7 +2,46 @@
 
 ## Status
 
-This is a development-only, pre-G1 pilot, not the proposed million-task benchmark.
+The researcher accepted the limited G1 layered evidence scope. The
+[small development diagnostic panel](../research/model_diagnostic_panel.md) locks
+64 simulated initial-layout/source groups (16 per family) and 64 real cases in
+distinct source rounds: 384 synthetic plus 64 local-only real request records.
+Its 128 CPU reference replays and immutable reuse are verified, but model calls
+remain zero. This is not a formal hidden test, measured real-control GT or an
+authorization for GPU/API, training or release.
+
+The [BSA acquisition and label audit](billiards_sports_analytics.md) adds a
+separate nine-ball source: 2,964 static layouts and 2,080 source-declared cm/time
+tracks, not main snooker task counts or measured cue controls. A
+[real factual forecast pilot](../research/world_model_data_bridge.md) exports
+1,053 unique eligible track cases with public prefixes/private futures; classical
+reference errors are not LLM or learned-world-model results.
+
+The [no-background cue/gap pilot](../pipelines/cue_gap_qc.md) now distinguishes
+current-frame cue recovery from identity association. Cue uncertainty decreased
+but remains unresolved; no complete-state, identity or real-control GT was added.
+
+The approved CPU-only [semantic QC pilot](../pipelines/semantic_qc_pilot.md)
+processed 16 original author recordings (6,609 frames): two support and 14
+development-check groups (6,097 frames), with five fixed profiles. Source-colour
+rules reduced automatic conflicts without changing detections; shared background
+did not establish spatial improvement. No human labels, model/API/GPU calls or
+measured cue controls were added. Accepted-task counts remain unchanged.
+
+A later [native-canvas audit](../pipelines/native_canvas_audit.md) verified sampled
+source/render crop consistency for 16 author recordings, with three distinct
+canvas/origin configurations. On 14 policy-check recordings, all 468 detected
+sampled points agreed with spatial path unions, but all 28 frames retained
+colour/inventory conflicts. This is not complete-state recall or model accuracy;
+accepted-task, measured-action and source-count totals below are unchanged.
+
+The inference-study preparation now includes safe paired views, physical labels,
+isotropic BEV rendering and a durable mock request/physics ledger. Its
+[engineering dry-run](../benchmark/study_preparation.md) is not model performance,
+training or real action evidence. Existing source and accepted-task counts below
+are unchanged.
+
+This is a development-only pilot, not the proposed million-task benchmark.
 No model training, Qwen inference or closed-model API experiments have run.
 The complete public Hugging Face raw-video source was subsequently acquired.
 Source-file counts and video hours remain separate from benchmark task counts.
@@ -282,6 +321,6 @@ complete, labelled single-shot task.
 
 ## Reproduction and labels
 
-Follow the [pilot protocol](../benchmark/benchmark_protocol.md). Code validation passed 120
+Follow the [pilot protocol](../benchmark/benchmark_protocol.md). Current code validation passed 187
 tests, Ruff and Mypy. Original and estimated observations, fitted actions and
 simulator truth must remain separate in subsequent versions.

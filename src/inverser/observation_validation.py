@@ -58,10 +58,7 @@ def validate_spatial_mapping(
         raise ValueError("Mapping validation produced non-finite error")
     maximum = float(np.max(errors))
     return SpatialMappingAudit(
-        matrix=tuple(
-            (float(row[0]), float(row[1]), float(row[2]))
-            for row in matrix
-        ),
+        matrix=tuple((float(row[0]), float(row[1]), float(row[2])) for row in matrix),
         calibration_groups=tuple(sorted(calibration_groups)),
         validation_groups=tuple(sorted(validation_groups)),
         validation_errors_px=tuple(float(value) for value in errors),

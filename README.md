@@ -4,9 +4,13 @@ InverseR 是一个面向二维台球物理推理的研究原型。项目的核�
 初始状态和目标终态，生成任意一个物理可行的单杆动作，包括击球方向、速度以及归一化的
 杆头横向/纵向偏移。复现历史球员的原始击球仅作为独立诊断任务，不是主任务的唯一正确答案。
 
-> **项目状态（2026-10-13）：** 当前处于 pre-G1 数据质量与实验基础设施阶段。
+> **项目状态（2026-10-14）：** G1 已接受限定的分层证据范围，小型开发诊断面板已锁定。
 > 已完成仿真开发集、真实视频原始候选收集、自动质量筛选和 mock 实验链路；尚未冻结正式
 > benchmark，也未进行模型训练、真实模型推理或正式性能评测。
+
+已准备的 [64＋64 开发诊断面板](docs/research/model_diagnostic_panel.md)含 384 个仿真
+配对请求和 64 个 local-only 真实前缀请求。实际 GPU/API 资源仍待明确确认，
+开发快照不等于正式盲测或实测真实动作 GT。
 
 ## 研究问题
 
@@ -21,7 +25,21 @@ InverseR 重点研究“预测准确”能否转化为“规划有效”：
 [研究与实验计划](docs/research/plan.md)及
 [世界模型研究报告](docs/research/world_model_research.md)。
 
+已实现的安全视图、等比例渲染、预算账本与 mock 命令见
+[实验准备说明](docs/benchmark/study_preparation.md)。这是工程验证，不加载模型或产生模型成绩。
+
 ## 已实现能力
+
+- [BSA 获取与标签审计](docs/data/billiards_sports_analytics.md)：完整公开数据计划已下载，
+  timed trajectory 已转换为 local-only 的真实事实预测输入；不充当真实 cue/spin GT。
+- [世界模型数据衔接](docs/research/world_model_data_bridge.md)：准备 action-conditioned
+  prediction→planning 主线和单独的真实 prefix 验证；尚未进行模型性能评测。
+
+- [CPU 语义质量 pilot](docs/pipelines/semantic_qc_pilot.md)：已实际运行 16 个作者录制、
+  五个预处理消融条件；报告空间参考和自动一致性，不宣称模型性能或检测准确率。
+
+- [真实源数据 canvas 审计](docs/pipelines/native_canvas_audit.md)：已核查 16 个录制的
+  抽样像素映射；空间路径兼容性与颜色/库存质量分别计分，不把弱观察升级为 Gold。
 
 - 基于 Pydantic 的台面状态、击球动作、物理参数、事件和实验 case 合同。
 - 基于 Pooltool 0.6.0 的可重放斯诺克仿真、witness 审计和终态评分。
@@ -29,6 +47,8 @@ InverseR 重点研究“预测准确”能否转化为“规划有效”：
 - 比赛视频的台面检测、BEV 观测、候选切分、失败恢复和自动质量筛选。
 - 作者数据的内容哈希去重、增量转换、人工路径 raster 核查和跨来源研究目录。
 - state/BEV 两种实验视图、typed 模型适配器、请求/物理预算账本和 mock dry-run。
+- random、Sobol、几何初始化＋Powell 的预算受控经典搜索，以及分组的预测、事件、
+  干预响应和候选 regret 诊断；`baseline-dry-run` 支持检查点恢复与产物校验。
 
 当前命令列表可通过以下命令查看：
 
@@ -67,22 +87,23 @@ python -m inverser --help
 
 | 工作流 | 状态 | 已取得结果 / 停止条件 |
 | --- | --- | --- |
-| 工程与任务合同 | 已完成开发版 | Python 包、CLI、schema、仿真、指标已建立；120 个测试、Ruff 和 Mypy 通过 |
+| 工程与任务合同 | 已完成开发版 | Python 包、CLI、schema、仿真、指标已建立；187 个测试、Ruff 和 Mypy 通过 |
 | 仿真 pilot | 已完成 | 2,000/2,000 导出记录通过 schema 与 witness 重放 |
 | 比赛视频原始收集 | 已完成 | 1,387/1,387 窗口完成，得到 7,114 个 raw episode |
 | 自动质量筛选 | 已完成 | 16 个自动优先项、6,004 个待重处理、887 个不适用项、207 个疑似重复 |
 | 作者数据同步 | 已完成原始转换 | 100 个 snooker 内容组完成转换；55 个复用、45 个新增 |
 | 统一研究目录 | 已完成 | 9,414 条引用通过来源与标签边界检查 |
 | E0 实验基础设施 | 已实现 mock 链路 | state/BEV renderer、typed client、预算账本和 dry-run；不代表真实模型结果 |
-| G1 数据质量 gate | **阻塞** | 需完成固定相机数据、370 条修复队列、映射误差和许可边界的独立核查 |
-| 模型实验与训练 | 未开始 | 0 次真实模型/API 调用；GPU/API/CPU/storage 额度需重新确认 |
-| 正式 benchmark / evaluation | 未开始 | 必须先通过 G1，并在 G2 冻结 split、指标、预算和协议 |
+| G1 分层证据范围 | 已接受有限开发范围 | 受控 snooker 动作真值主任务、BSA 真实 factual 辅助、原始弱观察用于感知/案例；真实 GT/许可问题未消失 |
+| 小型开发诊断面板 | 已锁定并验证 | 64 仿真布局＋64 来源 round；448 请求、128 reference replay；48 请求 API 子集尚未执行 |
+| 模型实验与训练 | 未开始 | 0 次真实模型/API 调用；CPU-only QC 已获 4 worker/20 GB 新产物/1 TB 总量额度，GPU/API 未批准 |
+| 正式 benchmark / evaluation | 未开始 | 开发快照不是 G2/G4；正式布局/来源、split、指标、预算和协议须另行冻结 |
 
 ## 后续实验 TODO
 
 | 阶段 | 计划 | 验收条件 |
 | --- | --- | --- |
-| P1：数据质量 | 优先核查 100 个固定相机 snooker 录制和 370 条定向修复队列；验证原视频到人工 raster 的映射、检测完整性和来源许可 | 形成可审计的 qualified/weak/rejected 分层，并由研究者决定 G1 |
+| P1：数据质量 | 已接受首轮有限证据范围；大规模真实主任务扩建仍需核查固定相机录制、修复队列、完整性和许可 | 当前弱观察不得冒充完整真实 GT；不因继续预处理延迟已接受的小面板诊断 |
 | P2：benchmark 冻结 | 固定数据 family split、任务输入输出、renderer、终态/事件指标、候选 bank、物理预算和统计协议 | 通过 G2；当前 2,000 条开发数据不得改名为盲测测试集 |
 | P3：backend smoke | 在明确资源授权后验证本地 vLLM/API 的模型身份、图像支持、单位、JSON 输出、usage 和错误路径 | 仅确认工程可用性，不报告性能 finding |
 | P4：开发诊断 | 先运行 E1 原生预测/直接规划与 E2 动作/物理干预，再按额度扩展 E3 候选排序和 E4 feedback 归因 | 所有方法共享案例、可见信息、候选和真实物理查询预算 |

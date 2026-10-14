@@ -9,6 +9,7 @@ description = "Reproducible, provenance-aware inverse snooker research."
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "numpy>=1.26,<2.4",
+    "scipy>=1.11,<2",
     "pooltool-billiards==0.6.0",
     "pydantic>=2.10,<3",
     "PyYAML>=6,<7",
@@ -16,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8,<9", "ruff>=0.11,<1", "mypy>=1.15,<2"]
-data = ["huggingface-hub>=1.0,<2"]
+data = ["huggingface-hub>=1.0,<2", "gdown>=5.2,<6", "openpyxl>=3.1,<4"]
 processing = ["opencv-python-headless>=4.12,<5"]
 inference = ["httpx>=0.28,<1"]
 
