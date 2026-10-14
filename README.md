@@ -6,11 +6,13 @@ InverseR 是一个面向二维台球物理推理的研究原型。项目的核�
 
 > **项目状态（2026-10-14）：** G1 已接受限定的分层证据范围，小型开发诊断面板已锁定。
 > 已完成仿真开发集、真实视频原始候选收集、自动质量筛选和 mock 实验链路；尚未冻结正式
-> benchmark，也未进行模型训练、真实模型推理或正式性能评测。
+> benchmark；未进行模型训练或正式性能评测，已完成小型 Azure 原生 API 开发诊断。
 
 已准备的 [64＋64 开发诊断面板](docs/research/model_diagnostic_panel.md)含 384 个仿真
-配对请求和 64 个 local-only 真实前缀请求。实际 GPU/API 资源仍待明确确认，
-开发快照不等于正式盲测或实测真实动作 GT。
+配对请求和 64 个 local-only 真实前缀请求。本地 GPU 与扩大 API 运行额度仍待确认，
+开发快照不等于正式盲测或实测真实动作 GT。随后已授权并完成
+[GPT-5-mini/GPT-5 原生小对照](docs/research/azure_native_pilot.md)：2 个布局、24 次
+合成请求、67,866 Tokens，8 次隐藏参考执行；没有真实资料外发或模型可用工具。
 
 ## 研究问题
 
@@ -33,7 +35,7 @@ InverseR 重点研究“预测准确”能否转化为“规划有效”：
 - [BSA 获取与标签审计](docs/data/billiards_sports_analytics.md)：完整公开数据计划已下载，
   timed trajectory 已转换为 local-only 的真实事实预测输入；不充当真实 cue/spin GT。
 - [世界模型数据衔接](docs/research/world_model_data_bridge.md)：准备 action-conditioned
-  prediction→planning 主线和单独的真实 prefix 验证；尚未进行模型性能评测。
+  prediction→planning 主线和单独的真实 prefix 验证；已跑有界 API 诊断，未做正式评测。
 
 - [CPU 语义质量 pilot](docs/pipelines/semantic_qc_pilot.md)：已实际运行 16 个作者录制、
   五个预处理消融条件；报告空间参考和自动一致性，不宣称模型性能或检测准确率。
@@ -87,7 +89,7 @@ python -m inverser --help
 
 | 工作流 | 状态 | 已取得结果 / 停止条件 |
 | --- | --- | --- |
-| 工程与任务合同 | 已完成开发版 | Python 包、CLI、schema、仿真、指标已建立；187 个测试、Ruff 和 Mypy 通过 |
+| 工程与任务合同 | 已完成开发版 | Python 包、CLI、schema、仿真、指标已建立；190 个测试、Ruff 和 Mypy 通过 |
 | 仿真 pilot | 已完成 | 2,000/2,000 导出记录通过 schema 与 witness 重放 |
 | 比赛视频原始收集 | 已完成 | 1,387/1,387 窗口完成，得到 7,114 个 raw episode |
 | 自动质量筛选 | 已完成 | 16 个自动优先项、6,004 个待重处理、887 个不适用项、207 个疑似重复 |
@@ -96,7 +98,7 @@ python -m inverser --help
 | E0 实验基础设施 | 已实现 mock 链路 | state/BEV renderer、typed client、预算账本和 dry-run；不代表真实模型结果 |
 | G1 分层证据范围 | 已接受有限开发范围 | 受控 snooker 动作真值主任务、BSA 真实 factual 辅助、原始弱观察用于感知/案例；真实 GT/许可问题未消失 |
 | 小型开发诊断面板 | 已锁定并验证 | 64 仿真布局＋64 来源 round；448 请求、128 reference replay；48 请求 API 子集尚未执行 |
-| 模型实验与训练 | 未开始 | 0 次真实模型/API 调用；CPU-only QC 已获 4 worker/20 GB 新产物/1 TB 总量额度，GPU/API 未批准 |
+| 模型开发诊断 | 已完成首个有界 API pilot | GPT-5-mini/GPT-5 共 24 调用；本地 GPU 未分配，完整 48/model 扩展未批准；无训练 |
 | 正式 benchmark / evaluation | 未开始 | 开发快照不是 G2/G4；正式布局/来源、split、指标、预算和协议须另行冻结 |
 
 ## 后续实验 TODO

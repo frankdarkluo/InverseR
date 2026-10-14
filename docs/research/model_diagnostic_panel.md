@@ -7,6 +7,8 @@ cue/spin GT，也不授权模型/GPU/API、训练或发布。
 实际面板位置：
 [model-diagnostic-panel-v1](../../data/research/model-diagnostic-panel-v1/)。
 这是已锁定的**开发诊断快照**，不是 G2/G4 的正式盲测 benchmark。
+本页记录准备时的快照；之后两个布局的
+[Azure 原生小对照](azure_native_pilot.md)已完成，不改变此面板或正式 gate。
 
 ## 1. 已锁定的数量与请求形状
 

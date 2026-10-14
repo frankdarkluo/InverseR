@@ -185,6 +185,22 @@ def main() -> int:
     diagnostic_panel.add_argument("--real-private", type=Path, required=True)
     diagnostic_panel.add_argument("--output", type=Path, required=True)
     diagnostic_panel.add_argument("--seed", type=int, default=20261014)
+    azure_pilot = commands.add_parser(
+        "azure-panel-pilot", help="Run a bounded synthetic-only paired Azure GPT-5 pilot"
+    )
+    azure_pilot.add_argument("--panel", type=Path, required=True)
+    azure_pilot.add_argument("--azure-config", type=Path, required=True)
+    azure_pilot.add_argument("--output", type=Path, required=True)
+    azure_pilot.add_argument("--endpoint-index", type=int, default=4)
+    azure_pilot.add_argument("--layouts", type=int, default=2)
+    azure_pilot.add_argument("--max-requests", type=int, default=24)
+    azure_pilot.add_argument("--max-total-tokens", type=int, default=300000)
+    azure_pilot.add_argument("--max-output-tokens", type=int, default=4096)
+    azure_pilot.add_argument(
+        "--reasoning-effort", choices=["minimal", "low", "medium", "high"], default="minimal"
+    )
+    azure_pilot.add_argument("--limit-jobs", type=int)
+    azure_pilot.add_argument("--execute", action="store_true")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if args.command in ("generate-pilot", "audit-pilot"):
@@ -371,6 +387,42 @@ def main() -> int:
             args.output,
             DiagnosticPanelConfig(seed=args.seed),
         )
+    elif args.command == "azure-panel-pilot":
+        from inverser.azure_study import AzurePilotConfig, run_azure_panel
+
+        config = AzurePilotConfig(
+            layouts=args.layouts,
+            max_model_requests=args.max_requests,
+            max_total_tokens=args.max_total_tokens,
+            max_output_tokens=args.max_output_tokens,
+            reasoning_effort=args.reasoning_effort,
+        )
+        if args.execute:
+            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+            logging.getLogger("azure").setLevel(logging.WARNING)
+            logging.getLogger("httpx").setLevel(logging.WARNING)
+            with DefaultAzureCredential(exclude_interactive_browser_credential=True) as credential:
+                result = run_azure_panel(
+                    args.panel,
+                    args.azure_config,
+                    args.output,
+                    config,
+                    endpoint_index=args.endpoint_index,
+                    execute=True,
+                    token_provider=get_bearer_token_provider(
+                        credential, "https://cognitiveservices.azure.com/.default"
+                    ),
+                    limit_jobs=args.limit_jobs,
+                )
+        else:
+            result = run_azure_panel(
+                args.panel,
+                args.azure_config,
+                args.output,
+                config,
+                endpoint_index=args.endpoint_index,
+            )
     else:
         from inverser.preview import render_preview
 

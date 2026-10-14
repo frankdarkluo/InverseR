@@ -6,9 +6,11 @@ The researcher accepted the limited G1 layered evidence scope. The
 [small development diagnostic panel](../research/model_diagnostic_panel.md) locks
 64 simulated initial-layout/source groups (16 per family) and 64 real cases in
 distinct source rounds: 384 synthetic plus 64 local-only real request records.
-Its 128 CPU reference replays and immutable reuse are verified, but model calls
-remain zero. This is not a formal hidden test, measured real-control GT or an
-authorization for GPU/API, training or release.
+Its 128 CPU reference replays and immutable reuse are verified. A subsequently
+authorized [Azure native pilot](../research/azure_native_pilot.md) used two of its
+synthetic layouts for 24 requests and eight hidden-judge replays. Real prefixes
+remain local-only, GPU/training/release unapproved. This is not a formal hidden
+test or measured real-control GT.
 
 The [BSA acquisition and label audit](billiards_sports_analytics.md) adds a
 separate nine-ball source: 2,964 static layouts and 2,080 source-declared cm/time
@@ -42,7 +44,8 @@ training or real action evidence. Existing source and accepted-task counts below
 are unchanged.
 
 This is a development-only pilot, not the proposed million-task benchmark.
-No model training, Qwen inference or closed-model API experiments have run.
+No model training or Qwen inference has run; the bounded Azure development pilot
+does not constitute a formal model comparison.
 The complete public Hugging Face raw-video source was subsequently acquired.
 Source-file counts and video hours remain separate from benchmark task counts.
 
@@ -321,6 +324,6 @@ complete, labelled single-shot task.
 
 ## Reproduction and labels
 
-Follow the [pilot protocol](../benchmark/benchmark_protocol.md). Current code validation passed 187
+Follow the [pilot protocol](../benchmark/benchmark_protocol.md). Current code validation passed 190
 tests, Ruff and Mypy. Original and estimated observations, fitted actions and
 simulator truth must remain separate in subsequent versions.

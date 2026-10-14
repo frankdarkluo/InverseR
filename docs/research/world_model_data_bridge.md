@@ -2,8 +2,9 @@
 
 本文锁定 empirical study 主线，不把数据量或 tracking 修复本身作为世界模型贡献。
 本轮已经下载真实辅助数据、完成有界旧数据 QC，并准备可执行的数据输入与参考基线。
-研究者已接受 G1 的有限分层范围，并锁定开发诊断面板。尚未运行待测 LLM/VLM、
-训练 learned dynamics 或通过正式评价 gate。
+研究者已接受 G1 的有限分层范围，并锁定开发诊断面板。随后完成了
+[24 请求 Azure 原生开发诊断](azure_native_pilot.md)，不是正式比较；尚未进行本地
+模型推理、训练 learned dynamics 或通过正式评价 gate。
 
 ## 1. 三条证据链不能混合
 
@@ -91,7 +92,8 @@ synthetic noise grid `0,0.25r,1r` 是声明的受控敏感性条件，不是实�
 
 研究者已接受有限的 G1 分层范围，[开发小面板](model_diagnostic_panel.md)实际生成并
 锁定：64 仿真布局＋64 不同 source-round 真实 case，共 448 请求记录；API 共同子集
-仅 48 个合成请求，目前 0 次模型调用。G2/G4 正式盲测没有因此通过。
+仅 48 个合成请求，尚未全跑；后续较小 API pilot 在其中两个布局上完成两模型共
+24 次调用，结果见[原生对照](azure_native_pilot.md)。G2/G4 正式盲测没有因此通过。
 
 接下来：
 

@@ -8,7 +8,9 @@ It does not authorize model jobs, serving installation or data expansion before
 their per-route resources and research gates are confirmed.
 G1 has been accepted for the limited layered development-study scope. The small
 diagnostic panel is locked, but formal G2/G4 freeze, method/training and model
-GPU/API allocations remain unapproved. Formal model experiments are unexecuted.
+GPU allocations and full API-panel expansion remain unapproved. A subsequently
+authorized 24-request Azure development pilot is completed; formal experiments
+are unexecuted.
 
 The active next-stage plan is [Section 13](#13-active-empirical-study-plan).
 It supersedes conflicting earlier resource and million-scale assumptions:
@@ -810,6 +812,25 @@ pre-implementation gap table below is historical; implemented surfaces are
 documented in [study preparation](../benchmark/study_preparation.md).
 
 ### 13.1 已确认范围与未确认资源
+
+#### Research checkpoint archived and bounded Azure native pilot completed
+
+研究者明确要求 commit/push 再尝试 GPT-5-mini 与 GPT-5。关键39文件已存档并推送
+`9a69dad`。参考外部 SoccerTactics Azure inventory 与 DefaultAzureCredential 认证，
+复用既有 synthetic-only contract、预算账本和 hidden judge，不复制 endpoint/密钥。
+
+大批预算问询暂未答复，因此只运行较小工程范围：2个共同布局（free_roll/center），
+每模型12请求、总24，30万总Token上限、4096completion cap、minimal reasoning，
+无自动重试/修复。实际全部完成：67,866Tokens、8次hidden judge、模型工具查询0。
+返回版本严格匹配 GPT-5-mini/GPT-5 2025-08-07。真实轨迹未外发，GPU未启动。
+
+合同有效输出 mini7/12、GPT-5 11/12；16个原生forward请求均未达到1r容差，8个goal
+提交均未达目标。有效样本子集不同，不能用valid-only误差排序。190测试、Ruff、
+Mypy36文件通过；重复验证新增remote请求/physics为0。
+
+见[Azure原生pilot](azure_native_pilot.md)。这是两个独立布局、minimal reasoning的
+开发诊断，不是正式模型排名或物理泛化结论。下一版先隔离格式可靠性和物理误差，再做
+等预算工具/候选bank对照；完整48请求/model扩展、GPU/训练/发布/G2/G4仍需明确决策。
 
 #### G1 scope accepted and small development panel locked
 

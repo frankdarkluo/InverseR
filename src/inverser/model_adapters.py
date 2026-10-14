@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import logging
+from collections.abc import Callable
 from ipaddress import ip_address
 from types import TracebackType
 from typing import Literal, Self
@@ -102,6 +103,11 @@ class BackendConfig(Record):
     execution_authorized: bool = False
     max_output_tokens: int = Field(default=1024, gt=0, le=8192)
     request_token_reservation: int = Field(default=16384, gt=0)
+    provider: Literal["openai", "azure_openai"] = "openai"
+    deployment_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._-]+$")
+    api_version: str | None = None
+    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    timeout_s: float = Field(default=30, gt=0, le=300)
 
     @model_validator(mode="after")
     def validate_endpoint(self) -> Self:
@@ -112,6 +118,11 @@ class BackendConfig(Record):
             raise ValueError("Backend endpoint must be an HTTP(S) URL")
         if self.kind == "api" and endpoint.scheme != "https":
             raise ValueError("External API endpoints must use HTTPS")
+        if self.provider == "azure_openai":
+            if self.kind != "api" or not self.deployment_name or not self.api_version:
+                raise ValueError("Azure requires an API backend, deployment name and API version")
+            if not self.reasoning_effort:
+                raise ValueError("Azure reasoning experiments require an explicit effort")
         if self.kind == "local_vllm":
             hostname = endpoint.hostname
             if hostname != "localhost":
@@ -136,6 +147,13 @@ class ModelReply(Record):
     content: str
     usage: TokenUsage
     cached: bool = False
+    finish_reason: str | None = None
+
+
+class InvalidModelReply(ValueError):
+    def __init__(self, reply: ModelReply, message: str) -> None:
+        super().__init__(message)
+        self.reply = reply
 
 
 def rendered_asset(
@@ -187,11 +205,14 @@ class ModelAdapter:
         *,
         transport: httpx.BaseTransport | None = None,
         api_key: str | None = None,
+        token_provider: Callable[[], str] | None = None,
     ) -> None:
         if config.kind != "mock" and not config.execution_authorized:
             raise RuntimeError("Actual backend execution needs explicit resource authorization")
-        if config.kind == "api" and not api_key:
+        if config.kind == "api" and not api_key and token_provider is None:
             raise ValueError("API credentials must be supplied at runtime")
+        if api_key and token_provider is not None:
+            raise ValueError("Supply exactly one runtime credential source")
         if config.kind != "mock" and config.model_revision == "unverified":
             raise ValueError("Actual backend execution needs a declared model revision")
         if config.request_token_reservation < config.max_output_tokens:
@@ -199,8 +220,9 @@ class ModelAdapter:
         if config.kind == "mock" and not isinstance(transport, httpx.MockTransport):
             raise ValueError("Mock backend requires an explicit mock transport")
         self.config = config
-        self._client = httpx.Client(transport=transport, timeout=30)
+        self._client = httpx.Client(transport=transport, timeout=config.timeout_s)
         self._api_key = api_key
+        self._token_provider = token_provider
 
     def __enter__(self) -> Self:
         return self
@@ -233,22 +255,34 @@ class ModelAdapter:
             for image in call.images
         )
         headers = {"X-Request-ID": request_id}
-        if self._api_key is not None:
-            headers["Authorization"] = "Bearer " + self._api_key
-        response = self._client.post(
-            self.config.base_url.rstrip("/") + "/chat/completions",
-            headers=headers,
-            json={
+        token = self._token_provider() if self._token_provider is not None else self._api_key
+        if token is not None:
+            headers["Authorization"] = "Bearer " + token
+        messages = [
+            {"role": "system", "content": "Return only the requested numerical JSON."},
+            {"role": "user", "content": content},
+        ]
+        url = self.config.base_url.rstrip("/")
+        params = None
+        if self.config.provider == "azure_openai":
+            url += f"/openai/deployments/{self.config.deployment_name}/chat/completions"
+            params = {"api-version": self.config.api_version}
+            request_payload = {
+                "messages": messages,
+                "max_completion_tokens": self.config.max_output_tokens,
+                "reasoning_effort": self.config.reasoning_effort,
+                "response_format": {"type": "json_object"},
+            }
+        else:
+            url += "/chat/completions"
+            request_payload = {
                 "model": self.config.model_id,
-                "messages": [
-                    {"role": "system", "content": "Return only the requested numerical JSON."},
-                    {"role": "user", "content": content},
-                ],
+                "messages": messages,
                 "temperature": 0,
                 "max_tokens": self.config.max_output_tokens,
                 "seed": call.seed,
-            },
-        )
+            }
+        response = self._client.post(url, headers=headers, params=params, json=request_payload)
         response.raise_for_status()
         payload: object = response.json()
         body = _object(payload, "body")
@@ -274,6 +308,24 @@ class ModelAdapter:
                 output_tokens=_token(fields.get("completion_tokens")),
                 total_tokens=_token(fields.get("total_tokens")),
             )
+        finish_reason = _object(choices[0], "choice").get("finish_reason")
+        if finish_reason is not None and not isinstance(finish_reason, str):
+            raise ValueError("Provider finish_reason must be a string")
+        reply = ModelReply(
+            backend_alias=self.config.alias,
+            model_id=self.config.model_id,
+            content=text,
+            usage=usage,
+            finish_reason=finish_reason,
+        )
+        try:
+            self.validate_submission(call, text)
+        except ValueError as error:
+            raise InvalidModelReply(reply, str(error)) from error
+        return reply
+
+    @staticmethod
+    def validate_submission(call: ModelCall, text: str) -> None:
         if isinstance(call.input, GoalInput):
             GoalSubmission.model_validate_json(text)
         else:
@@ -308,9 +360,3 @@ class ModelAdapter:
                     valid = second in (pockets if event.event_type == "pocket" else cushions)
                 if not valid:
                     raise ValueError("Contact prediction has unavailable ball/geometry")
-        return ModelReply(
-            backend_alias=self.config.alias,
-            model_id=self.config.model_id,
-            content=text,
-            usage=usage,
-        )

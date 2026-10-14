@@ -9,7 +9,7 @@ import httpx
 from pydantic import Field, TypeAdapter
 
 from inverser.metrics import EndpointScore, score_endpoint
-from inverser.model_adapters import ModelAdapter, ModelCall, ModelReply
+from inverser.model_adapters import InvalidModelReply, ModelAdapter, ModelCall, ModelReply
 from inverser.physics import Replay, SimulationFailure, SnookerSimulator
 from inverser.runtime import fingerprint, write_json
 from inverser.schemas import CueAction, Layout, Record, ShotRecord
@@ -172,6 +172,17 @@ class TrialLedger:
             )
         LOGGER.error("Model request %s failed: %s", key, code)
 
+    def reject_reply(self, key: str) -> None:
+        with self.connection:
+            changed = self.connection.execute(
+                "UPDATE requests SET status='known_error',error_code='invalid_submission' "
+                "WHERE request_key=? AND status='complete'",
+                (key,),
+            ).rowcount
+        if changed != 1:
+            raise ValueError("Only a billed completed reply can be rejected")
+        LOGGER.error("Model request %s returned an invalid submission", key)
+
     def _reserve_physics_locked(self) -> int:
         occupied = (
             self.connection.execute(
@@ -283,7 +294,7 @@ class TrialLedger:
         replies = [
             ModelReply.model_validate_json(row[0])
             for row in self.connection.execute(
-                "SELECT reply_json FROM requests WHERE status='complete'"
+                "SELECT reply_json FROM requests WHERE reply_json IS NOT NULL"
             )
         ]
         fields = {
@@ -309,6 +320,10 @@ def request_model(adapter: ModelAdapter, call: ModelCall, ledger: TrialLedger) -
         return cached
     try:
         reply = adapter._complete(call, key)
+    except InvalidModelReply as error:
+        ledger.finish_request(key, error.reply)
+        ledger.reject_reply(key)
+        raise
     except httpx.RequestError:
         ledger.fail_request(key, "transport_response_unknown", unknown_response=True)
         raise
