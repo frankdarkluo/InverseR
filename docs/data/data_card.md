@@ -12,6 +12,21 @@ synthetic layouts for 24 requests and eight hidden-judge replays. Real prefixes
 remain local-only, GPU/training/release unapproved. This is not a formal hidden
 test or measured real-control GT.
 
+A subsequent 200-layout goal-only extension uses a new versioned development
+panel: 50 distinct layout/source groups per family, 400 synthetic API requests,
+848,209 Tokens and 398 hidden-judge rollouts. Both models achieved 0/200 under
+the fixed one-radius/no-scratch criterion. All 200 public goal contracts passed
+known-witness positive controls in a separate CPU audit. Prompts were unchanged,
+failures retained, no real prefix data sent; this is not a formal unseen test.
+
+The [planning-budget/warm-start pilot](../research/planning_pilots.md) selects
+32 distinct groups (eight per family) from that development panel. It reuses 64
+cached model proposals and adds zero API calls. Geometry direct succeeds on
+10/32; geometry plus bounded Powell on 14/32, versus 12/32 for either model-first
+warm start at the 128-query anytime checkpoint. Search scheduling is a measured
+confound, not evidence that all model-guided planning fails. Actual CPU rollouts
+are 16,551 search plus 374 hidden judge; no accepted real-task totals change.
+
 The [BSA acquisition and label audit](billiards_sports_analytics.md) adds a
 separate nine-ball source: 2,964 static layouts and 2,080 source-declared cm/time
 tracks, not main snooker task counts or measured cue controls. A
@@ -324,6 +339,6 @@ complete, labelled single-shot task.
 
 ## Reproduction and labels
 
-Follow the [pilot protocol](../benchmark/benchmark_protocol.md). Current code validation passed 190
+Follow the [pilot protocol](../benchmark/benchmark_protocol.md). Current code validation passed 197
 tests, Ruff and Mypy. Original and estimated observations, fitted actions and
 simulator truth must remain separate in subsequent versions.

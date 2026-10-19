@@ -194,3 +194,99 @@ def test_api_pilot_pairs_models_isolates_real_data_and_resumes(
         run_azure_panel(
             panel, source, output, config.model_copy(update={"reasoning_effort": "low"}), **kwargs
         )
+
+
+def test_expanded_goal_design_keeps_legacy_pilot_budget_ceilings():
+    config = AzurePilotConfig(
+        design="goal_structured",
+        layouts=200,
+        max_model_requests=400,
+        max_total_tokens=2000000,
+    )
+    assert config.layouts == 200
+    with pytest.raises(ValueError, match="legacy"):
+        AzurePilotConfig(layouts=200, max_model_requests=400, max_total_tokens=2000000)
+    with pytest.raises(ValueError, match="both models"):
+        AzurePilotConfig(
+            design="goal_structured",
+            layouts=200,
+            max_model_requests=399,
+            max_total_tokens=2000000,
+        )
+    with pytest.raises(ValueError, match="balanced"):
+        AzurePilotConfig(design="goal_structured", layouts=199, max_model_requests=400)
+
+
+def test_expanded_goal_run_scores_complete_paired_source_groups(
+    tmp_path, monkeypatch, study_fixture
+):
+    monkeypatch.setattr(diagnostic_panel, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(diagnostic_panel, "check_storage", lambda reserve: None)
+    monkeypatch.setattr(azure_study, "PROJECT_ROOT", tmp_path)
+    monkeypatch.setattr(azure_study, "check_storage", lambda reserve: None)
+    panel = tmp_path / "data/panel"
+    prepare_diagnostic_panel(
+        *source_inputs(tmp_path, study_fixture),
+        panel,
+        DiagnosticPanelConfig(synthetic_layouts=4, real_round_cases=4),
+    )
+    calls = []
+
+    def handler(request):
+        calls.append(request)
+        body = json.loads(request.content)
+        assert len(body["messages"][1]["content"]) == 1
+        task = json.loads(body["messages"][1]["content"][0]["text"])["task"]
+        assert "action" not in task and task["source_kind"] == "simulated"
+        labels = json.loads((panel / "private" / f"{task['case_id']}.json").read_text())
+        model = request.url.path.split("/")[-3]
+        content = (
+            GoalSubmission(action=labels["record"]["witness_action"]).model_dump_json()
+            if model == "gpt-5"
+            else '{"bad":1}'
+        )
+        return httpx.Response(
+            200,
+            json={
+                "model": model + "-2025-08-07",
+                "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 5, "completion_tokens": 10, "total_tokens": 15},
+            },
+        )
+
+    config = AzurePilotConfig(
+        design="goal_structured",
+        layouts=4,
+        max_model_requests=8,
+        max_total_tokens=200000,
+    )
+    output = tmp_path / "data/goals"
+    kwargs = {
+        "endpoint_index": 0,
+        "execute": True,
+        "token_provider": lambda: "fixture-token",
+        "transport": httpx.MockTransport(handler),
+    }
+    source = azure_inventory(tmp_path)
+    partial = run_azure_panel(panel, source, output, config, limit_jobs=2, **kwargs)
+    assert partial["status"] == "partial"
+    complete = run_azure_panel(panel, source, output, config, **kwargs)
+    assert complete["status"] == "completed" and len(calls) == 8
+    assert complete["usage"]["total_tokens"] == 120
+    assert len(complete["by_model_view"]) == 2
+    assert all(row["expected_forward_requests"] == 0 for row in complete["by_model_view"])
+    results = complete["goal_evaluation"]
+    assert results["paired_success"]["independent_groups"] == 4
+    assert results["paired_success"]["mean_difference_a_minus_b"] == -1
+    assert results["paired_outcomes"] == {
+        "both_success": 0,
+        "only_gpt5_mini_success": 0,
+        "only_gpt5_success": 4,
+        "neither_success": 0,
+    }
+    for row in results["by_model_family"]:
+        assert row["planned_layouts"] == row["attempted_layouts"] == 1
+        assert row["goal_successes"] == (row["model"] == "gpt-5")
+    assert all(row["success_rate_ci95"][0] >= 0 for row in results["by_model"])
+    repeated = run_azure_panel(panel, source, output, config, **kwargs)
+    assert repeated["new_model_requests"] == 0 and len(calls) == 8

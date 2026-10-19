@@ -159,3 +159,40 @@ def test_panel_size_and_source_selection_are_explicit(tmp_path, study_fixture):
             model_adapter_ready=True,
             api_common_subset=True,
         )
+
+
+def test_200_layout_sampling_is_balanced_unique_and_versioned(tmp_path, study_fixture):
+    _, record, _ = study_fixture
+    records = []
+    for family in ("free_roll", "center", "vertical", "side"):
+        for index in range(50):
+            offset = len(records) * 0.001
+            records.append(
+                record.model_copy(
+                    update={
+                        "family": family,
+                        "task_id": f"{family}-{index}",
+                        "group_id": f"{family}-{index}",
+                        "initial": Layout(
+                            balls=(
+                                BallPosition(ball_id="cue", kind="cue", xy_m=(0.6, 0.8 + offset)),
+                            )
+                        ),
+                    }
+                )
+            )
+    source = tmp_path / "synthetic-200.jsonl"
+    source.write_text("\n".join(row.model_dump_json() for row in records) + "\n")
+    with pytest.raises(ValueError, match="version"):
+        DiagnosticPanelConfig(synthetic_layouts=200)
+    config = DiagnosticPanelConfig(
+        schema_version="development-evaluation-panel-v1",
+        synthetic_layouts=200,
+    )
+    chosen = select_synthetic_records(source, config)
+    assert len(chosen) == len({r.group_id for r in chosen}) == 200
+    assert all(
+        sum(r.family == family for r in chosen) == 50 for family in diagnostic_panel.FAMILIES
+    )
+    assert len({r.initial.balls[0].xy_m for r in chosen}) == 200
+    assert chosen == select_synthetic_records(source, config)

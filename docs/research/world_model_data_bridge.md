@@ -3,15 +3,21 @@
 本文锁定 empirical study 主线，不把数据量或 tracking 修复本身作为世界模型贡献。
 本轮已经下载真实辅助数据、完成有界旧数据 QC，并准备可执行的数据输入与参考基线。
 研究者已接受 G1 的有限分层范围，并锁定开发诊断面板。随后完成了
-[24 请求 Azure 原生开发诊断](azure_native_pilot.md)，不是正式比较；尚未进行本地
-模型推理、训练 learned dynamics 或通过正式评价 gate。
+[Azure 原生开发诊断](azure_native_pilot.md)：先 24 请求冒烟，再 200 布局、400 请求
+的数值目标击球扩展，保持原提示且不做格式修复。不是正式比较；尚未进行本地模型
+推理、训练 learned dynamics 或通过正式评价 gate。
+关于哪些 predictor、可执行世界或 agent 模块可借，见
+[2023–2026 方法调研](world_model_methods_2023_2026.md)。原生目标策略的失败不能代替
+盲测动作后果的结果，真实 prefix 也不变成可执行 cue 监督。
+新的[32 布局 CPU 规划 pilot](planning_pilots.md)已比较经典搜索和缓存模型动作起点；
+后续收益来自数值求解和反馈，不当作 native learned dynamics 的成绩。
 
 ## 1. 三条证据链不能混合
 
 | Track | 输入与证据 | 目标 | 当前状态 |
 | --- | --- | --- | --- |
 | Controlled action-conditioned dynamics | 合成 snooker 初始状态、指定 cue action、可见物理参数；隐藏未来与 witness | Native intervention prediction、事件与轨迹响应 | 已锁定 64 布局开发面板、基础/单变量动作、paired state/BEV；未做正式盲测冻结 |
-| Prediction to planning utility | 相同候选 bank、目标、可见证据和查询预算 | 排序/regret、最终提交 goal success、成本和工具归因 | 经典/mocked harness 已验证；没有模型成绩 |
+| Prediction to planning utility | 相同候选 bank、目标、可见证据和查询预算 | 排序/regret、最终提交 goal success、成本和工具归因 | 已有原生 goal 与 32 布局经典/缓存提案搜索；blind prediction→ranking 和模型反馈修正仍待实跑 |
 | Real factual dynamics | BSA 已发表的 past x/y/time prefix；隐藏未来标注 | Source-annotated future compatibility | 从 1,053 case pilot 锁定 64 个不同 source-round 开发 case；local-only adapter 尚待接入 |
 
 给模型一个 Pooltool 工具不意味着它自己学到了动力学；BSA 单球轨迹也不能变成任意

@@ -2,6 +2,10 @@
 
 这是一份计划阶段的定向文献补充，不是实验结果。此前的完整三视角调查保留在 [研究报告](world_model_research.md)。
 
+2026-10-15 的[方法调研](world_model_methods_2023_2026.md)进一步加入 JEPA-WMs 的
+组件消融/预测代理研究，以及 BilliardPhys-Bench、VisPhyWorld、LLMPhy、PhysMind
+等更近工作。“首次发现预测—规划 gap”不作为新的贡献主张；本文保留原计划阶段记录。
+
 ## 1. ICLR 2027 的访问与核查边界
 
 对用户提供的 [ICLR 2027 active submissions](https://openreview.net/group?id=ICLR.cc/2027/Conference#tab-active-submissions) 进行了公开检索。研究助手检查了物理推理、动作条件世界模型、prediction/planning utility、干预一致性及 simulator-feedback attribution 等方向。

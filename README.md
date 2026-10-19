@@ -4,15 +4,21 @@ InverseR 是一个面向二维台球物理推理的研究原型。项目的核�
 初始状态和目标终态，生成任意一个物理可行的单杆动作，包括击球方向、速度以及归一化的
 杆头横向/纵向偏移。复现历史球员的原始击球仅作为独立诊断任务，不是主任务的唯一正确答案。
 
-> **项目状态（2026-10-14）：** G1 已接受限定的分层证据范围，小型开发诊断面板已锁定。
+> **项目状态（2026-10-17）：** G1 已接受限定的分层证据范围，原生模型与规划预算 pilot 已完成。
 > 已完成仿真开发集、真实视频原始候选收集、自动质量筛选和 mock 实验链路；尚未冻结正式
 > benchmark；未进行模型训练或正式性能评测，已完成小型 Azure 原生 API 开发诊断。
 
 已准备的 [64＋64 开发诊断面板](docs/research/model_diagnostic_panel.md)含 384 个仿真
-配对请求和 64 个 local-only 真实前缀请求。本地 GPU 与扩大 API 运行额度仍待确认，
+配对请求和 64 个 local-only 真实前缀请求。本地 GPU 与新增实验运行额度仍待确认，
 开发快照不等于正式盲测或实测真实动作 GT。随后已授权并完成
 [GPT-5-mini/GPT-5 原生小对照](docs/research/azure_native_pilot.md)：2 个布局、24 次
 合成请求、67,866 Tokens，8 次隐藏参考执行；没有真实资料外发或模型可用工具。
+随后保持原提示与 minimal 推理预算，在 200 个不同布局上完成两模型共 400 次
+structured goal 请求，848,209 Tokens；两模型均为 0/200 目标成功，200/200 隐藏
+witness 正控通过。详见同一[结果报告](docs/research/azure_native_pilot.md)。
+进一步的[32 布局规划 pilot](docs/research/planning_pilots.md)中，几何直接方案 10/32，
+几何＋128 次有界搜索 14/32，缓存 GPT 动作优先 warm-start 均为 12/32；新增 API 为 0。
+这不等于模型自身学会了动力学，起点顺序和几何 baseline 需要分别归因。
 
 ## 研究问题
 
@@ -26,6 +32,8 @@ InverseR 重点研究“预测准确”能否转化为“规划有效”：
 完整的可证伪假设、对照实验和证据边界见
 [研究与实验计划](docs/research/plan.md)及
 [世界模型研究报告](docs/research/world_model_research.md)。
+最新的[2023–2026 方法调研](docs/research/world_model_methods_2023_2026.md)核查了 32 篇
+工作，区分学习式后果预测与工具控制，并给出可借模块、最近邻和分阶段适配路线。
 
 已实现的安全视图、等比例渲染、预算账本与 mock 命令见
 [实验准备说明](docs/benchmark/study_preparation.md)。这是工程验证，不加载模型或产生模型成绩。
@@ -89,7 +97,7 @@ python -m inverser --help
 
 | 工作流 | 状态 | 已取得结果 / 停止条件 |
 | --- | --- | --- |
-| 工程与任务合同 | 已完成开发版 | Python 包、CLI、schema、仿真、指标已建立；190 个测试、Ruff 和 Mypy 通过 |
+| 工程与任务合同 | 已完成开发版 | Python 包、CLI、schema、仿真、指标已建立；197 个测试、Ruff 和 Mypy 通过 |
 | 仿真 pilot | 已完成 | 2,000/2,000 导出记录通过 schema 与 witness 重放 |
 | 比赛视频原始收集 | 已完成 | 1,387/1,387 窗口完成，得到 7,114 个 raw episode |
 | 自动质量筛选 | 已完成 | 16 个自动优先项、6,004 个待重处理、887 个不适用项、207 个疑似重复 |
@@ -98,7 +106,8 @@ python -m inverser --help
 | E0 实验基础设施 | 已实现 mock 链路 | state/BEV renderer、typed client、预算账本和 dry-run；不代表真实模型结果 |
 | G1 分层证据范围 | 已接受有限开发范围 | 受控 snooker 动作真值主任务、BSA 真实 factual 辅助、原始弱观察用于感知/案例；真实 GT/许可问题未消失 |
 | 小型开发诊断面板 | 已锁定并验证 | 64 仿真布局＋64 来源 round；448 请求、128 reference replay；48 请求 API 子集尚未执行 |
-| 模型开发诊断 | 已完成首个有界 API pilot | GPT-5-mini/GPT-5 共 24 调用；本地 GPU 未分配，完整 48/model 扩展未批准；无训练 |
+| 模型开发诊断 | 已完成 200 布局主任务扩展 | 新增两模型各 200 次数值目标击球请求，均 0/200 成功；398 hidden judge＋200 正控审计；无工具/格式修复/训练 |
+| CPU 规划 pilot | 已完成 32 布局配对 | 经典 14/32 vs 缓存 GPT warm-start 各 12/32（128-query 前缀）；16,925 rollouts，新增模型调用 0 |
 | 正式 benchmark / evaluation | 未开始 | 开发快照不是 G2/G4；正式布局/来源、split、指标、预算和协议须另行冻结 |
 
 ## 后续实验 TODO

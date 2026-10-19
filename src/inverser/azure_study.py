@@ -1,6 +1,6 @@
 import json
 import logging
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Callable
 from contextlib import ExitStack
 from pathlib import Path
@@ -10,13 +10,20 @@ from typing import Literal, Self
 import httpx
 import numpy as np
 from pydantic import Field, model_validator
+from scipy.stats import binomtest
 
 from inverser.diagnostic_panel import (
     PanelRequest,
     load_synthetic_panel_call,
     validate_diagnostic_panel,
 )
-from inverser.diagnostics import ForwardScore, score_forward, score_intervention_pair
+from inverser.diagnostics import (
+    ForwardScore,
+    PairedMeasurement,
+    score_forward,
+    score_intervention_pair,
+    summarize_paired,
+)
 from inverser.evaluation import BudgetLimits, TrialLedger, recorded_replay, request_model
 from inverser.metrics import EndpointScore, score_endpoint
 from inverser.model_adapters import BackendConfig, InvalidModelReply, ModelAdapter, ModelReply
@@ -32,9 +39,10 @@ MODELS = ("gpt-5-mini", "gpt-5")
 
 class AzurePilotConfig(Record):
     schema_version: Literal["azure-native-pilot-v1"] = "azure-native-pilot-v1"
-    layouts: int = Field(default=2, ge=1, le=8)
-    max_model_requests: int = Field(default=24, ge=1, le=100)
-    max_total_tokens: int = Field(default=300000, ge=1, le=1000000)
+    design: Literal["paired", "goal_structured"] = "paired"
+    layouts: int = Field(default=2, ge=1, le=200)
+    max_model_requests: int = Field(default=24, ge=1, le=400)
+    max_total_tokens: int = Field(default=300000, ge=1, le=2000000)
     max_output_tokens: int = Field(default=4096, ge=256, le=8192)
     request_token_reservation: int = Field(default=16384, ge=8192)
     reasoning_effort: Literal["minimal", "low", "medium", "high"] = "minimal"
@@ -42,7 +50,14 @@ class AzurePilotConfig(Record):
 
     @model_validator(mode="after")
     def validate_allocation(self) -> Self:
-        if self.max_model_requests < self.layouts * 12:
+        if self.design == "paired" and (
+            self.layouts > 8 or self.max_model_requests > 100 or self.max_total_tokens > 1000000
+        ):
+            raise ValueError("The legacy paired pilot retains its eight-layout budget ceilings")
+        if self.design == "goal_structured" and self.layouts % 4:
+            raise ValueError("Expanded goal layouts must be balanced across four source families")
+        requests_per_layout = 12 if self.design == "paired" else 2
+        if self.max_model_requests < self.layouts * requests_per_layout:
             raise ValueError("Request allocation must cover both models and all six paired tasks")
         if self.request_token_reservation < self.max_output_tokens:
             raise ValueError("Each token reservation must cover its completion cap")
@@ -103,19 +118,30 @@ def load_azure_backends(
     return tuple(backends)
 
 
-def select_pilot_requests(panel: Path, layouts: int) -> tuple[PanelRequest, ...]:
+def select_pilot_requests(
+    panel: Path, layouts: int, *, design: Literal["paired", "goal_structured"] = "paired"
+) -> tuple[PanelRequest, ...]:
     requests = [
         PanelRequest.model_validate_json(line) for line in (panel / "request_index.jsonl").open()
     ]
     selection = json.loads((panel / "private/selection.json").read_text())["synthetic"]
-    eligible = {r.case_id for r in requests if r.api_common_subset and not r.local_only}
+    eligible = {
+        r.case_id
+        for r in requests
+        if not r.local_only
+        and (
+            r.api_common_subset
+            if design == "paired"
+            else r.task == "synthetic_goal" and r.view == "structured"
+        )
+    }
     by_family: dict[str, list[str]] = defaultdict(list)
     for item in selection:
         if item["case_id"] in eligible:
             by_family[item["family"]].append(item["case_id"])
     case_ids = [
         cases[index]
-        for index in range(2)
+        for index in range(max((len(cases) for cases in by_family.values()), default=0))
         for family in ("free_roll", "center", "vertical", "side")
         for cases in (by_family[family],)
         if len(cases) > index
@@ -123,10 +149,21 @@ def select_pilot_requests(panel: Path, layouts: int) -> tuple[PanelRequest, ...]
     if len(case_ids) != layouts:
         raise ValueError("Too few API-common layouts for the requested pilot")
     selected = tuple(
-        request for case_id in case_ids for request in requests if request.case_id == case_id
+        request
+        for case_id in case_ids
+        for request in requests
+        if request.case_id == case_id
+        and (
+            design == "paired"
+            or (request.task == "synthetic_goal" and request.view == "structured")
+        )
     )
-    if len(selected) != layouts * 6 or any(
-        r.local_only or not r.model_adapter_ready or not r.api_common_subset for r in selected
+    expected = layouts * (6 if design == "paired" else 1)
+    if len(selected) != expected or any(
+        r.local_only
+        or not r.model_adapter_ready
+        or (design == "paired" and not r.api_common_subset)
+        for r in selected
     ):
         raise ValueError("Pilot must contain complete synthetic-only paired request blocks")
     return selected
@@ -181,13 +218,19 @@ def _score_row(
     )
 
 
-def summarize_rows(panel: Path, rows: list[PilotRow], layouts: int) -> list[dict[str, object]]:
+def summarize_rows(
+    panel: Path,
+    rows: list[PilotRow],
+    layouts: int,
+    *,
+    design: Literal["paired", "goal_structured"] = "paired",
+) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     radius = json.loads((panel / "manifest.json").read_text())["resolved_physics"][0]["config"][
         "ball_radius_m"
     ]
     for model in MODELS:
-        for view in ("structured", "bev"):
+        for view in ("structured", "bev") if design == "paired" else ("structured",):
             group = [row for row in rows if row.model == model and row.view == view]
             forwards = [row.forward_score for row in group if row.forward_score is not None]
             goals = [row.goal_score for row in group if row.goal_score is not None]
@@ -200,7 +243,7 @@ def summarize_rows(panel: Path, rows: list[PilotRow], layouts: int) -> list[dict
                 {
                     "model": model,
                     "view": view,
-                    "expected_requests": layouts * 3,
+                    "expected_requests": layouts * (3 if design == "paired" else 1),
                     "attempted_requests": len(group),
                     "valid_outputs": sum(row.valid_output for row in group),
                     "valid_forward_outputs": len(forwards),
@@ -208,7 +251,7 @@ def summarize_rows(panel: Path, rows: list[PilotRow], layouts: int) -> list[dict
                     "forward_position_successes": sum(
                         score.positions_success for score in forwards
                     ),
-                    "expected_forward_requests": layouts * 2,
+                    "expected_forward_requests": layouts * 2 if design == "paired" else 0,
                     "contact_f1_valid_only": float(np.mean([s.contacts.f1 for s in forwards]))
                     if forwards
                     else None,
@@ -218,6 +261,111 @@ def summarize_rows(panel: Path, rows: list[PilotRow], layouts: int) -> list[dict
                 }
             )
     return result
+
+
+def summarize_goal_evaluation(
+    panel: Path, rows: list[PilotRow], requests: tuple[PanelRequest, ...]
+) -> dict[str, object]:
+    case_ids = {request.case_id for request in requests}
+    selection = {
+        item["case_id"]: item
+        for item in json.loads((panel / "private/selection.json").read_text())["synthetic"]
+        if item["case_id"] in case_ids
+    }
+    radius = json.loads((panel / "manifest.json").read_text())["resolved_physics"][0]["config"][
+        "ball_radius_m"
+    ]
+    by_model: list[dict[str, object]] = []
+    by_model_family: list[dict[str, object]] = []
+    paired: dict[str, dict[str, PilotRow]] = defaultdict(dict)
+    for model in MODELS:
+        model_rows = [row for row in rows if row.model == model]
+        if len({row.case_id for row in model_rows}) != len(model_rows):
+            raise ValueError("Goal evaluation must have one submission per model and layout")
+        for row in model_rows:
+            paired[row.case_id][model] = row
+        for family in (None, "free_roll", "center", "vertical", "side"):
+            planned = {
+                case_id
+                for case_id, item in selection.items()
+                if family is None or item["family"] == family
+            }
+            group = [row for row in model_rows if row.case_id in planned]
+            successes = sum(row.goal_score is not None and row.goal_score.success for row in group)
+            errors = [
+                row.goal_score.max_position_error_m / radius
+                for row in group
+                if row.goal_score is not None and row.goal_score.max_position_error_m is not None
+            ]
+            interval = binomtest(successes, len(group)).proportion_ci() if group else None
+            summary: dict[str, object] = {
+                "model": model,
+                "family": family,
+                "planned_layouts": len(planned),
+                "attempted_layouts": len(group),
+                "valid_outputs": sum(row.valid_output for row in group),
+                "goal_successes": successes,
+                "success_rate": successes / len(group) if group else None,
+                "success_rate_ci95": (interval.low, interval.high) if interval else None,
+                "confidence_method": "exact_binomial",
+                "position_scored_layouts": len(errors),
+                "mean_max_error_radii_position_scored_only": float(np.mean(errors))
+                if errors
+                else None,
+                "median_max_error_radii_position_scored_only": float(np.median(errors))
+                if errors
+                else None,
+                "outcomes": dict(
+                    Counter(
+                        row.error_code
+                        or (
+                            row.goal_score.failure or "success"
+                            if row.goal_score is not None
+                            else "unscored"
+                        )
+                        for row in group
+                    )
+                ),
+            }
+            (by_model if family is None else by_model_family).append(summary)
+    outcomes: Counter[str] = Counter(
+        dict.fromkeys(
+            ("both_success", "only_gpt5_mini_success", "only_gpt5_success", "neither_success"), 0
+        )
+    )
+    measurements = []
+    for case_id, model_pair in paired.items():
+        if set(model_pair) != set(MODELS):
+            continue
+        a, b = (model_pair[model].goal_score for model in MODELS)
+        left, right = bool(a is not None and a.success), bool(b is not None and b.success)
+        outcomes[
+            "both_success"
+            if left and right
+            else "only_gpt5_mini_success"
+            if left
+            else "only_gpt5_success"
+            if right
+            else "neither_success"
+        ] += 1
+        measurements.append(
+            PairedMeasurement(
+                pair_id=case_id,
+                group_id=selection[case_id]["source_group"],
+                a=float(left),
+                b=float(right),
+            )
+        )
+    return {
+        "by_model": by_model,
+        "by_model_family": by_model_family,
+        "paired_outcomes": dict(outcomes),
+        "paired_success": summarize_paired(tuple(measurements), seed=20261015).model_dump(
+            mode="json"
+        )
+        if measurements
+        else None,
+    }
 
 
 def summarize_interventions(panel: Path, rows: list[PilotRow]) -> list[dict[str, object]]:
@@ -285,11 +433,11 @@ def run_azure_panel(
 ) -> dict[str, object]:
     validation = validate_diagnostic_panel(panel)
     backends = load_azure_backends(source, endpoint_index, config)
-    requests = select_pilot_requests(panel, config.layouts)
+    requests = select_pilot_requests(panel, config.layouts, design=config.design)
     limits = BudgetLimits(
         max_model_requests=config.max_model_requests,
         max_total_tokens=config.max_total_tokens,
-        max_physics_evaluations=config.layouts * 4,
+        max_physics_evaluations=config.layouts * (4 if config.design == "paired" else 2),
     )
     protocol = {
         "panel_manifest_sha256": validation["manifest_sha256"],
@@ -423,12 +571,16 @@ def run_azure_panel(
             "run_hash": run_hash,
             "stop_error": stop_error,
             "independent_layouts": config.layouts,
+            "evaluation_design": config.design,
             "planned_requests": len(requests) * 2,
             "completed_jobs": len(rows),
             "new_model_requests": ledger.counts()["model_requests"] - before,
             "resource_counts": ledger.counts(),
             "usage": ledger.usage_totals(),
-            "by_model_view": summarize_rows(panel, rows, config.layouts),
+            "by_model_view": summarize_rows(panel, rows, config.layouts, design=config.design),
+            "goal_evaluation": summarize_goal_evaluation(panel, rows, requests)
+            if config.design == "goal_structured"
+            else None,
             "interventions": summarize_interventions(panel, rows),
             "real_data_sent": False,
             "formal_evaluation": False,

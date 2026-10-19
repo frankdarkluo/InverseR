@@ -232,7 +232,16 @@ def search_goal(
     ledger: TrialLedger,
     *,
     namespace: str,
+    initial_actions: tuple[CueAction, ...] = (),
 ) -> SearchResult:
+    if initial_actions and config.method != "geometry_powell":
+        raise ValueError("Public warm starts are supported only by the Powell baseline")
+    if len(initial_actions) > config.max_starts or any(
+        not config.min_cue_speed_mps <= action.cue_speed_mps <= config.max_cue_speed_mps
+        or action.elevation_deg != 0
+        for action in initial_actions
+    ):
+        raise ValueError("Warm-start actions must obey the declared search bounds")
     if goal.physics.withheld_parameters or goal.physics != public_physics(simulator):
         raise ValueError("Known-physics search must use the declared public engine configuration")
     start_time = perf_counter()
@@ -248,7 +257,11 @@ def search_goal(
         namespace
         + "/"
         + fingerprint(
-            {"goal": goal.model_dump(mode="json"), "config": config.model_dump(mode="json")}
+            {
+                "goal": goal.model_dump(mode="json"),
+                "config": config.model_dump(mode="json"),
+                "initial_actions": [action.model_dump(mode="json") for action in initial_actions],
+            }
         )
     )
 
@@ -312,9 +325,11 @@ def search_goal(
             for action in sampled_actions(config, config.max_objective_calls):
                 evaluate(action)
         else:
-            seeds = (geometry_actions(goal, config) + sampled_actions(config, config.max_starts))[
-                : config.max_starts
-            ]
+            seeds = (
+                initial_actions
+                + geometry_actions(goal, config)
+                + sampled_actions(config, config.max_starts)
+            )[: config.max_starts]
             for index, seed in enumerate(seeds):
                 remaining = config.max_objective_calls - len(attempts)
                 if remaining <= 0:

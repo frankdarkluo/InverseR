@@ -80,6 +80,44 @@ def test_geometry_seed_solves_analytical_fixture_without_privileged_action(study
     assert seed.tip_side == seed.tip_vertical == 0
 
 
+def test_warm_start_is_public_bounded_and_uses_the_same_query_budget(tmp_path, study_fixture):
+    simulator, record, case = study_fixture
+    config = SearchConfig(method="geometry_powell", seed=3, max_objective_calls=4)
+    ledger = TrialLedger(
+        tmp_path / "warm.sqlite", BudgetLimits(max_model_requests=0, max_physics_evaluations=4)
+    )
+    result = search_goal(
+        case.goal_input(),
+        config,
+        simulator,
+        ledger,
+        namespace="warm",
+        initial_actions=(record.witness_action,),
+    )
+    assert result.attempts[0].action == record.witness_action
+    assert result.selected_goal_success and len(result.attempts) == 1
+    assert ledger.counts()["physics_evaluations"] == 1
+    with pytest.raises(ValueError, match="Powell"):
+        search_goal(
+            case.goal_input(),
+            config.model_copy(update={"method": "sobol"}),
+            simulator,
+            ledger,
+            namespace="invalid",
+            initial_actions=(record.witness_action,),
+        )
+    with pytest.raises(ValueError, match="bounds"):
+        search_goal(
+            case.goal_input(),
+            config.model_copy(update={"min_cue_speed_mps": 1.0}),
+            simulator,
+            ledger,
+            namespace="invalid",
+            initial_actions=(record.witness_action,),
+        )
+    ledger.close()
+
+
 def test_zero_budget_does_not_invent_a_selected_action(tmp_path, study_fixture):
     simulator, _, case = study_fixture
     ledger = TrialLedger(

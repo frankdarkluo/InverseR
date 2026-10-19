@@ -6,8 +6,17 @@ InverseR 已接受 G1 的有限分层证据范围，并锁定小型开发诊断�
 
 ## Research：研究路线与文献
 
-- [Azure GPT-5 原生开发对照](research/azure_native_pilot.md)：实际 24 请求，保留合同
-  失败、预测/执行指标和 Token 账本；两个布局的工程结果，不是正式排名。
+- [B0/B/C 实验协议与代码准备](research/bc_protocol.md)：推理强度探针、后果预测与干预、共同
+  bank 选择、反馈归因四条 plan-only 命令；请求数、预算上限和信息边界；目前只做了 mock 验证。
+
+- [规划预算与模型提案 pilot](research/planning_pilots.md)：32 个共同布局、经典搜索
+  和缓存 GPT warm-start；实际成功曲线、种子顺序解释及零新增 API 调用。
+
+- [2023–2026 世界模型方法与迁移](research/world_model_methods_2023_2026.md)：32 篇核查
+  文献；动作条件预测、对象状态、可执行物理和多模态规划；借用模块、许可与新颖性边界。
+
+- [Azure GPT-5 原生开发对照](research/azure_native_pilot.md)：原 24 请求冒烟加上
+  200 布局、两模型 400 请求的数值目标击球扩展；正控、分层指标和 Token 账本，不是正式排名。
 
 - [小型开发诊断面板](research/model_diagnostic_panel.md)：已锁定 64 仿真布局＋64 保来源组
   真实 case、配对动作/输入、隐藏标签、48 请求 API 共同子集；尚未调用模型。

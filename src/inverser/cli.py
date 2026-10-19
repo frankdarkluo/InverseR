@@ -1,7 +1,40 @@
 import argparse
 import json
 import logging
+from collections.abc import Callable
 from pathlib import Path
+
+EFFORTS = ["minimal", "low", "medium", "high"]
+
+
+def _with_azure_token(run: Callable[[Callable[[], str]], dict[str, object]]) -> dict[str, object]:
+    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
+
+    logging.getLogger("azure").setLevel(logging.WARNING)
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    with DefaultAzureCredential(exclude_interactive_browser_credential=True) as credential:
+        return run(
+            get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
+        )
+
+
+def _study_api_arguments(parser: argparse.ArgumentParser, **defaults: int) -> None:
+    parser.add_argument("--azure-config", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--endpoint-index", type=int, default=4)
+    parser.add_argument("--max-requests", type=int, default=defaults["requests"])
+    parser.add_argument("--max-total-tokens", type=int, default=defaults["tokens"])
+    parser.add_argument("--max-output-tokens", type=int, default=defaults["output"])
+    parser.add_argument("--request-token-reservation", type=int, default=defaults["reservation"])
+    parser.add_argument("--execute", action="store_true")
+
+
+def _study_result(report: dict[str, object], args: argparse.Namespace) -> dict[str, object]:
+    if report["status"] == "planned_no_calls":
+        return report
+    brief = {key: value for key, value in report.items() if not isinstance(value, list)}
+    brief["summary_file"] = str(args.output / "summary.json")
+    return brief
 
 
 def main() -> int:
@@ -185,6 +218,7 @@ def main() -> int:
     diagnostic_panel.add_argument("--real-private", type=Path, required=True)
     diagnostic_panel.add_argument("--output", type=Path, required=True)
     diagnostic_panel.add_argument("--seed", type=int, default=20261014)
+    diagnostic_panel.add_argument("--synthetic-layouts", type=int, default=64)
     azure_pilot = commands.add_parser(
         "azure-panel-pilot", help="Run a bounded synthetic-only paired Azure GPT-5 pilot"
     )
@@ -193,6 +227,7 @@ def main() -> int:
     azure_pilot.add_argument("--output", type=Path, required=True)
     azure_pilot.add_argument("--endpoint-index", type=int, default=4)
     azure_pilot.add_argument("--layouts", type=int, default=2)
+    azure_pilot.add_argument("--design", choices=["paired", "goal_structured"], default="paired")
     azure_pilot.add_argument("--max-requests", type=int, default=24)
     azure_pilot.add_argument("--max-total-tokens", type=int, default=300000)
     azure_pilot.add_argument("--max-output-tokens", type=int, default=4096)
@@ -201,6 +236,61 @@ def main() -> int:
     )
     azure_pilot.add_argument("--limit-jobs", type=int)
     azure_pilot.add_argument("--execute", action="store_true")
+    planning_pilot = commands.add_parser(
+        "run-planning-pilot", help="Compare bounded classical search and cached model warm starts"
+    )
+    planning_pilot.add_argument("--panel", type=Path, required=True)
+    planning_pilot.add_argument("--native-run", type=Path, required=True)
+    planning_pilot.add_argument("--output", type=Path, required=True)
+    planning_pilot.add_argument("--layouts", type=int, default=32)
+    planning_pilot.add_argument("--workers", type=int, default=4)
+    planning_pilot.add_argument("--seed", type=int, default=20261017)
+    planning_pilot.add_argument("--limit-cases", type=int)
+    native_probe = commands.add_parser(
+        "native-probe",
+        help="B0 reasoning-effort probe or B1 forward/intervention run; plan-only by default",
+    )
+    native_probe.add_argument("--panel", type=Path, required=True)
+    native_probe.add_argument(
+        "--design", choices=["effort_probe", "forward_intervention"], default="effort_probe"
+    )
+    native_probe.add_argument("--layouts", type=int, default=8)
+    native_probe.add_argument("--efforts", nargs="+", choices=EFFORTS, default=EFFORTS)
+    native_probe.add_argument("--limit-jobs", type=int)
+    _study_api_arguments(
+        native_probe, requests=192, tokens=2_000_000, output=32768, reservation=40960
+    )
+    bank_panel = commands.add_parser(
+        "prepare-bank-panel", help="Freeze the B2 common candidate bank without model inference"
+    )
+    bank_panel.add_argument("--source-panel", type=Path, required=True)
+    bank_panel.add_argument("--output", type=Path, required=True)
+    bank_panel.add_argument("--layouts", type=int, default=64)
+    bank_panel.add_argument("--candidates", type=int, default=8)
+    bank_panel.add_argument("--bev-layouts", type=int, default=16)
+    bank_panel.add_argument("--seed", type=int, default=20261019)
+    bank_study = commands.add_parser(
+        "bank-study", help="B2 blind bank forecasts and direct selection; plans only by default"
+    )
+    bank_study.add_argument("--bank-panel", type=Path, required=True)
+    bank_study.add_argument("--reasoning-effort", choices=EFFORTS, required=True)
+    bank_study.add_argument("--limit-jobs", type=int)
+    _study_api_arguments(
+        bank_study, requests=1440, tokens=20_000_000, output=4096, reservation=16384
+    )
+    feedback_study = commands.add_parser(
+        "feedback-study",
+        help="C genuine/shuffled/no-evidence feedback episodes; plans only by default",
+    )
+    feedback_study.add_argument("--panel", type=Path, required=True)
+    feedback_study.add_argument("--native-run", type=Path, required=True)
+    feedback_study.add_argument("--reasoning-effort", choices=EFFORTS, required=True)
+    feedback_study.add_argument("--layouts", type=int, default=32)
+    feedback_study.add_argument("--max-attempts", type=int, default=8)
+    feedback_study.add_argument("--limit-episodes", type=int)
+    _study_api_arguments(
+        feedback_study, requests=1408, tokens=20_000_000, output=4096, reservation=16384
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if args.command in ("generate-pilot", "audit-pilot"):
@@ -385,12 +475,19 @@ def main() -> int:
             args.real_public,
             args.real_private,
             args.output,
-            DiagnosticPanelConfig(seed=args.seed),
+            DiagnosticPanelConfig(
+                schema_version="development-evaluation-panel-v1"
+                if args.synthetic_layouts > 64
+                else "development-diagnostic-panel-v1",
+                synthetic_layouts=args.synthetic_layouts,
+                seed=args.seed,
+            ),
         )
     elif args.command == "azure-panel-pilot":
         from inverser.azure_study import AzurePilotConfig, run_azure_panel
 
         config = AzurePilotConfig(
+            design=args.design,
             layouts=args.layouts,
             max_model_requests=args.max_requests,
             max_total_tokens=args.max_total_tokens,
@@ -423,6 +520,114 @@ def main() -> int:
                 config,
                 endpoint_index=args.endpoint_index,
             )
+    elif args.command == "run-planning-pilot":
+        from inverser.planning_pilot import PlanningPilotConfig, run_planning_pilot
+
+        planning_report = run_planning_pilot(
+            args.panel,
+            args.native_run,
+            args.output,
+            PlanningPilotConfig(layouts=args.layouts, workers=args.workers, seed=args.seed),
+            limit_cases=args.limit_cases,
+        )
+        result = {
+            key: value
+            for key, value in planning_report.items()
+            if key not in ("by_method_budget_family", "paired_success_comparisons")
+        }
+        result["summary_file"] = str(args.output / "summary.json")
+    elif args.command == "native-probe":
+        from inverser.native_probe import NativeProbeConfig, run_native_probe
+
+        probe_config = NativeProbeConfig(
+            design=args.design,
+            layouts=args.layouts,
+            reasoning_efforts=tuple(args.efforts),
+            max_model_requests=args.max_requests,
+            max_total_tokens=args.max_total_tokens,
+            max_output_tokens=args.max_output_tokens,
+            request_token_reservation=args.request_token_reservation,
+        )
+
+        def probe(token: Callable[[], str] | None) -> dict[str, object]:
+            return run_native_probe(
+                args.panel,
+                args.azure_config,
+                args.output,
+                probe_config,
+                endpoint_index=args.endpoint_index,
+                execute=token is not None,
+                token_provider=token,
+                limit_jobs=args.limit_jobs,
+            )
+
+        result = _study_result(_with_azure_token(probe) if args.execute else probe(None), args)
+    elif args.command == "prepare-bank-panel":
+        from inverser.bank_study import BankPanelConfig, prepare_bank_panel
+
+        result = prepare_bank_panel(
+            args.source_panel,
+            args.output,
+            BankPanelConfig(
+                layouts=args.layouts,
+                candidates=args.candidates,
+                bev_layouts=args.bev_layouts,
+                seed=args.seed,
+            ),
+        )
+    elif args.command == "bank-study":
+        from inverser.bank_study import BankStudyConfig, run_bank_study
+
+        bank_config = BankStudyConfig(
+            reasoning_effort=args.reasoning_effort,
+            max_model_requests=args.max_requests,
+            max_total_tokens=args.max_total_tokens,
+            max_output_tokens=args.max_output_tokens,
+            request_token_reservation=args.request_token_reservation,
+        )
+
+        def bank(token: Callable[[], str] | None) -> dict[str, object]:
+            return run_bank_study(
+                args.bank_panel,
+                args.azure_config,
+                args.output,
+                bank_config,
+                endpoint_index=args.endpoint_index,
+                execute=token is not None,
+                token_provider=token,
+                limit_jobs=args.limit_jobs,
+            )
+
+        result = _study_result(_with_azure_token(bank) if args.execute else bank(None), args)
+    elif args.command == "feedback-study":
+        from inverser.feedback_study import FeedbackStudyConfig, run_feedback_study
+
+        feedback_config = FeedbackStudyConfig(
+            layouts=args.layouts,
+            max_attempts=args.max_attempts,
+            reasoning_effort=args.reasoning_effort,
+            max_model_requests=args.max_requests,
+            max_total_tokens=args.max_total_tokens,
+            max_output_tokens=args.max_output_tokens,
+            request_token_reservation=args.request_token_reservation,
+        )
+
+        def feedback(token: Callable[[], str] | None) -> dict[str, object]:
+            return run_feedback_study(
+                args.panel,
+                args.native_run,
+                args.azure_config,
+                args.output,
+                feedback_config,
+                endpoint_index=args.endpoint_index,
+                execute=token is not None,
+                token_provider=token,
+                limit_episodes=args.limit_episodes,
+            )
+
+        result = _study_result(
+            _with_azure_token(feedback) if args.execute else feedback(None), args
+        )
     else:
         from inverser.preview import render_preview
 

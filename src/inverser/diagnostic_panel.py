@@ -30,9 +30,11 @@ FAMILIES = ("free_roll", "center", "vertical", "side")
 
 
 class DiagnosticPanelConfig(Record):
-    schema_version: Literal["development-diagnostic-panel-v1"] = "development-diagnostic-panel-v1"
+    schema_version: Literal[
+        "development-diagnostic-panel-v1", "development-evaluation-panel-v1"
+    ] = "development-diagnostic-panel-v1"
     seed: int = Field(default=20261014, ge=0)
-    synthetic_layouts: int = Field(default=64, ge=4, le=64)
+    synthetic_layouts: int = Field(default=64, ge=4, le=200)
     real_round_cases: int = Field(default=64, ge=4, le=64)
     sample_times_s: tuple[float, float, float] = (0.25, 0.5, 1.0)
     tolerance_radii: float = Field(default=1.0, ge=1.0, le=1.0)
@@ -40,6 +42,8 @@ class DiagnosticPanelConfig(Record):
 
     @model_validator(mode="after")
     def validate_size(self) -> Self:
+        if self.synthetic_layouts > 64 and self.schema_version != "development-evaluation-panel-v1":
+            raise ValueError("More than 64 layouts require a new development-evaluation version")
         if self.synthetic_layouts % 4:
             raise ValueError("Synthetic development layouts must be balanced across four families")
         if not 0 <= self.sample_times_s[0] < self.sample_times_s[1] < self.sample_times_s[2]:

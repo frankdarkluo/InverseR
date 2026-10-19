@@ -8,9 +8,9 @@ It does not authorize model jobs, serving installation or data expansion before
 their per-route resources and research gates are confirmed.
 G1 has been accepted for the limited layered development-study scope. The small
 diagnostic panel is locked, but formal G2/G4 freeze, method/training and model
-GPU allocations and full API-panel expansion remain unapproved. A subsequently
-authorized 24-request Azure development pilot is completed; formal experiments
-are unexecuted.
+GPU allocations and the full paired API matrix remain unapproved. The authorized
+24-request Azure pilot and subsequent 200-layout/400-request structured-goal
+development evaluation are completed; formal experiments are unexecuted.
 
 The active next-stage plan is [Section 13](#13-active-empirical-study-plan).
 It supersedes conflicting earlier resource and million-scale assumptions:
@@ -812,6 +812,83 @@ pre-implementation gap table below is historical; implemented surfaces are
 documented in [study preparation](../benchmark/study_preparation.md).
 
 ### 13.1 已确认范围与未确认资源
+
+#### B0/B/C code and mock-test preparation
+
+研究者确认路线 B0→B1/B2→C 与推荐档，要求先写代码和 mock 测试、不调用 API；B0 额度另行确认。
+新增 `native-probe`（B0 推理强度探针；B1 forward＋单变量干预＋击后母球 v/ω oracle）、
+`prepare-bank-panel`/`bank-study`（B2：与 goal 无关的 Sobol bank、由 bank 内候选生成 goal、
+盲测 forecast、直接选择、确定性 selector/free-roll/oracle/随机期望）和 `feedback-study`
+（C：genuine/shuffled/reflection，三条件共用第 1 轮）。全部默认 plan-only，无 `--execute` 不发请求。
+
+真实冻结面板 plan-only 核查：B0 192、B1 768、B2 1,440、C 192 局/≤1,408 请求；bank 面板 64 布局
+每布局恰 1 个可达候选，随机选择期望 12.5%。临时目录已删除，正式 bank 面板未冻结。未改动 14 个
+未提交运行的 producer 文件（hash 一致）；211 测试、Ruff、Mypy 41 文件通过；实际 API、GPU、训练
+均为 0。随后研究者要求把当时全部改动做一次本地存档提交，不推送。见 [B0/B/C 协议](bc_protocol.md)。
+
+#### CPU planning pilots: classical budgets and cached LM proposals
+
+研究者要求先做 pilot。新增8布局/128请求/100万Token的付费范围问询暂未答复，
+采用已说明的CPU-only路线：从200布局面板按seed20261017/source-group hash选32，
+每family8，不按原成绩挑选，复用64条历史GPT动作，新增API/Tokens均0。
+
+实际256job完成。零搜索Geometry10/32，原两模型各0/32。固定128-horizon的
+8/32/128-query前缀：Random/Sobol均0；Geometry-Powell为10/12/14；
+Mini-warm为0/2/12，GPT5-warm为0/1/12。128时LMwarm成功均是几何14个的子集；
+配对差-6.25pp、bootstrap95%[-15.625,0]pp，不做普遍排名。
+
+trace核查几何起点baseline第1次访问，model-first实际访问者到第33次才访问，
+所以紧预算结果混有起点优先级/调度效应。不是对所有模型提案的反证，更不是LLM
+根据反馈进行了新推理。Sourcefamily标签不代表spin必要性。
+16,575objectiveattempts；实际16,551agent_search+374hiddenjudge=16,925rollout，
+4workers、142.33MB、0unresolved，completed重跑禁止simulator构造后0新增工作。
+197tests/Ruff/Mypy37通过；旧面板/API回复不改写。
+
+见[规划pilot](planning_pilots.md)。下一步先解耦seed质量和顺序，再在新明确预算下
+测blindforward/同bank效用及真实反馈vs无新证据反思。没有新增训练、GPU、付费API、
+真实外发或正式G2/G4授权；暂不格式修复。
+
+#### 2023–2026 method survey and closest-prior update
+
+研究者要求 deep research 多模态世界模型、consequences 与 physics 方法。本轮四个
+独立视角及综述核查保留32篇，主要论文/出版身份/可读实现和许可按范围核查；
+没有新增API/GPU实验、训练、权重下载或外来代码执行。
+
+详见[方法与迁移报告](world_model_methods_2023_2026.md)。新增重要约束：
+JEPA-WMs已系统研究预测/表征/动作条件/规划效用；BilliardPhys-Bench已有台球后果评测；
+VisPhyWorld、LLMPhy、PhysMind已有可执行世界和物理辨识；SimLM/CueTip已支持台球
+反馈、事件到连续优化及spin。因此不主张首次gap、首次LLM台球/旋转/仿真工具。
+
+下一研究顺序暂定：P0盲测后果/同bank效用与actuator-kinematic诊断；P1强经典及
+CueTip/SimLM-style有界提案-优化-验证；P2真实prefix状态/参数假设；获资源和训练
+批准后P3compactobject/visual-latent predictor。不优先格式修复或大视频生成器。
+方法假设聚焦接触敏感的错误归因、任务相关验证预算及隐藏状态的不确定性；仍待反证
+和最近邻性能比较，不能把已有模块组合当创新。所有新运行/训练预算另行明确，
+当前200goal-only的0/200不等于已测世界模型动力学失败。
+
+#### 200-layout goal evaluation completed; format treatment deferred
+
+研究者要求扩大到200sample并暂不考虑格式。范围问询暂未答复，按已明确说明的较省
+主任务方案执行：200个不同initial-layout/source组，四family各50；两模型各一次
+structured goal提交，共400请求，上限200万Tokens，原提示/JSON-object、minimal
+reasoning、4096completion、1r/no-scratch保持不变，无格式修复或自动重试。
+完整旧矩阵的2400请求、工具反馈、本地GPU/训练/正式G2/G4没有因此授权。
+
+`model-evaluation-panel-200-v1`采用新development-evaluation版本，400次基础/干预
+CPU replay通过；旧64布局快照不改写，64realprefix仍local-only、不送API。
+实际400请求完成，848209Tokens（828868input＋19341output），398 hiddenjudge
+物理执行。两模型都是0/200严格goal成功；mini199/200动作合法，GPT-5 200/200。
+位置可算子集的最大终态误差均值61.75r/61.45r，子集不同，不据此排名。
+
+追加200个公共goal合同的known-witness正控：200/200在1e-8m通过，最大偏差
+6.75e-16m；另从cache重算399个合法提交分数全部一致、无新增API/仿真。
+400job checksum、200共同布局、每family50、版本2025-08-07与账本全核对，
+completed repeat禁止HTTP/构造simulator通过。193测试、Ruff、Mypy36通过。
+
+详见[200布局结果和命令](azure_native_pilot.md#200-个布局的目标击球扩展2026-10-15)。
+零成功表明当前无工具单次数值策略不可靠，不是现实物理、泛化、spin必要性或更大
+reasoning预算的结论。下一阶段优先同布局经典/仿真反馈收益，而不是格式干预；
+新增API/工具预算与正式评价另行确认。
 
 #### Research checkpoint archived and bounded Azure native pilot completed
 
