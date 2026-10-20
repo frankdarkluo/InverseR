@@ -70,7 +70,7 @@ class FeedbackStudyConfig(Record):
     max_total_tokens: int = Field(default=20_000_000, ge=1, le=40_000_000)
     max_output_tokens: int = Field(default=4096, ge=256, le=32768)
     request_token_reservation: int = Field(default=16384, ge=8192)
-    timeout_s: float = Field(default=300, gt=0, le=300)
+    timeout_s: float = Field(default=900, gt=0, le=900)
 
     @model_validator(mode="after")
     def validate_design(self) -> Self:

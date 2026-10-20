@@ -6,6 +6,9 @@ InverseR 已接受 G1 的有限分层证据范围，并锁定小型开发诊断�
 
 ## Research：研究路线与文献
 
+- [B0 推理强度探针结果](research/b0_effort_probe.md)：8 布局、两模型、四档推理强度共 192 请求；
+  所有格终态精度为零，按预注册规则 B1/B2/C 用 minimal；token、截断、耗时与中断记录。
+
 - [B0/B/C 实验协议与代码准备](research/bc_protocol.md)：推理强度探针、后果预测与干预、共同
   bank 选择、反馈归因四条 plan-only 命令；请求数、预算上限和信息边界；目前只做了 mock 验证。
 

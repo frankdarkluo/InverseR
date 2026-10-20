@@ -66,6 +66,7 @@ FIRST_ATTEMPT_NOTE = (
 
 class StudyBackendConfig(BackendConfig):
     max_output_tokens: int = Field(default=1024, gt=0, le=32768)
+    timeout_s: float = Field(default=30, gt=0, le=900)
 
 
 def study_azure_backends(
@@ -236,7 +237,11 @@ class StudyCall(Record):
 
 
 class StudyAdapter(ModelAdapter):
-    """Adds StudyCall requests; the HTTP exchange mirrors the frozen ModelAdapter._complete."""
+    """Mirrors the frozen ModelAdapter HTTP exchange for ModelCall and StudyCall prompts.
+
+    Unlike the frozen adapter, an empty completion (e.g. reasoning exhausted the cap) is kept as
+    a billed invalid reply with its usage instead of aborting the run.
+    """
 
     def study_request_key(self, call: StudyCall) -> str:
         return fingerprint(
@@ -248,14 +253,16 @@ class StudyAdapter(ModelAdapter):
             }
         )
 
-    def complete_study(self, call: StudyCall, request_id: str) -> ModelReply:
-        content: list[dict[str, object]] = [{"type": "text", "text": call.prompt()}]
+    def _exchange(
+        self, prompt: str, images: tuple[RenderedAsset, ...], request_id: str, seed: int
+    ) -> ModelReply:
+        content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
         content.extend(
             {
                 "type": "image_url",
                 "image_url": {"url": "data:image/png;base64," + image.png_base64},
             }
-            for image in call.images
+            for image in images
         )
         headers = {"X-Request-ID": request_id}
         token = self._token_provider() if self._token_provider is not None else self._api_key
@@ -283,7 +290,7 @@ class StudyAdapter(ModelAdapter):
                 "messages": messages,
                 "temperature": 0,
                 "max_tokens": self.config.max_output_tokens,
-                "seed": 0,
+                "seed": seed,
             }
         response = self._client.post(url, headers=headers, params=params, json=request_payload)
         response.raise_for_status()
@@ -295,8 +302,8 @@ class StudyAdapter(ModelAdapter):
             raise ValueError("Exactly one model response choice is required")
         choice = _object(choices[0], "choice")
         text = _object(choice.get("message"), "message").get("content")
-        if not isinstance(text, str) or not text:
-            raise ValueError("A nonempty textual model response is required")
+        if text is not None and not isinstance(text, str):
+            raise ValueError("Model response content must be text")
         usage_data = body.get("usage")
         if usage_data is None:
             LOGGER.warning(
@@ -316,12 +323,26 @@ class StudyAdapter(ModelAdapter):
         reply = ModelReply(
             backend_alias=self.config.alias,
             model_id=self.config.model_id,
-            content=text,
+            content=text or "",
             usage=usage,
             finish_reason=finish_reason,
         )
+        if not reply.content:
+            raise InvalidModelReply(reply, f"Empty completion (finish_reason={finish_reason})")
+        return reply
+
+    def _complete(self, call: ModelCall, request_id: str) -> ModelReply:
+        reply = self._exchange(call.prompt(), call.images, request_id, call.seed)
         try:
-            call.validate_reply(text)
+            self.validate_submission(call, reply.content)
+        except ValueError as error:
+            raise InvalidModelReply(reply, str(error)) from error
+        return reply
+
+    def complete_study(self, call: StudyCall, request_id: str) -> ModelReply:
+        reply = self._exchange(call.prompt(), call.images, request_id, 0)
+        try:
+            call.validate_reply(reply.content)
         except ValueError as error:
             raise InvalidModelReply(reply, str(error)) from error
         return reply

@@ -7,7 +7,7 @@ from test_azure_study import azure_inventory
 
 from inverser.baselines import make_action_bank
 from inverser.evaluation import BudgetLimits, TrialLedger, UnresolvedRequest, request_model
-from inverser.model_adapters import BackendConfig, ModelCall, rendered_asset
+from inverser.model_adapters import BackendConfig, ModelAdapter, ModelCall, rendered_asset
 from inverser.study import GoalSubmission
 from inverser.study_calls import (
     FEEDBACK_NOTE,
@@ -36,7 +36,7 @@ def backends(tmp_path, effort="high"):
         reasoning_effort=effort,
         max_output_tokens=32768,
         request_token_reservation=40960,
-        timeout_s=300,
+        timeout_s=900,
     )
 
 
@@ -48,9 +48,97 @@ def test_study_backends_admit_long_reasoning_without_changing_inventory_identity
     mini, full = backends(tmp_path)
     assert (mini.model_id, full.model_id) == ("gpt-5-mini-2025-08-07", "gpt-5-2025-08-07")
     assert mini.max_output_tokens == 32768 and mini.reasoning_effort == "high"
-    assert mini.base_url == "https://fixture.openai.azure.com/"
+    assert mini.base_url == "https://fixture.openai.azure.com/" and mini.timeout_s == 900
+    frozen = {**mini.model_dump(), "base_url": mini.base_url}
     with pytest.raises(ValidationError):
-        BackendConfig.model_validate({**mini.model_dump(), "base_url": mini.base_url})
+        BackendConfig.model_validate(frozen)
+    with pytest.raises(ValidationError):
+        BackendConfig.model_validate({**frozen, "max_output_tokens": 8192})
+
+
+def test_study_adapter_sends_the_frozen_adapter_request_for_native_calls(tmp_path, study_fixture):
+    _, record, case = study_fixture
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-5-mini-2025-08-07",
+                "choices": [
+                    {
+                        "message": {
+                            "content": GoalSubmission(
+                                action=record.witness_action.model_dump()
+                            ).model_dump_json()
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 9, "total_tokens": 16},
+            },
+        )
+
+    # The frozen adapter caps output at 8192, so compare both at a cap it accepts.
+    backend = backends(tmp_path)[0].model_copy(
+        update={"execution_authorized": True, "max_output_tokens": 8192}
+    )
+    call = ModelCall(view="structured", input=case.goal_input())
+    frozen_backend = BackendConfig.model_validate(
+        {**backend.model_dump(), "base_url": backend.base_url, "timeout_s": 300}
+    )
+    for adapter_type, config in ((ModelAdapter, frozen_backend), (StudyAdapter, backend)):
+        with adapter_type(
+            config, transport=httpx.MockTransport(handler), token_provider=lambda: "fixture-token"
+        ) as adapter:
+            assert adapter._complete(call, "fixed-request-id").content
+    frozen, study = seen
+    assert (frozen.method, frozen.url, frozen.content) == (study.method, study.url, study.content)
+    assert dict(frozen.headers) == dict(study.headers)
+
+
+def test_empty_completion_is_billed_as_invalid_without_aborting(tmp_path, study_fixture):
+    _, _, case = study_fixture
+
+    def handler(request):
+        return httpx.Response(
+            200,
+            json={
+                "model": "gpt-5-mini-2025-08-07",
+                "choices": [{"message": {"content": ""}, "finish_reason": "length"}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 32768, "total_tokens": 32775},
+            },
+        )
+
+    ledger = TrialLedger(
+        tmp_path / "ledger.sqlite",
+        BudgetLimits(max_model_requests=2, max_physics_evaluations=0, max_total_tokens=200000),
+    )
+    selection = StudyCall(
+        view="structured",
+        input=BankSelectionInput(
+            goal=case.goal_input(),
+            candidates=make_action_bank(case.case_id, count=2, seed=3).candidates,
+        ),
+    )
+    with StudyAdapter(
+        backends(tmp_path)[0].model_copy(update={"execution_authorized": True}),
+        transport=httpx.MockTransport(handler),
+        token_provider=lambda: "fixture-token",
+    ) as adapter:
+        for send in (
+            lambda: request_model(
+                adapter, ModelCall(view="structured", input=case.goal_input()), ledger
+            ),
+            lambda: request_study_model(adapter, selection, ledger),
+        ):
+            outcome = guarded_request(send)
+            assert (outcome.error_code, outcome.stop_error) == ("invalid_submission", None)
+            assert outcome.reply is not None and outcome.reply.finish_reason == "length"
+    statuses = {row[0] for row in ledger.connection.execute("SELECT status FROM requests")}
+    assert statuses == {"known_error"} and ledger.usage_totals()["total_tokens"] == 2 * 32775
+    ledger.close()
 
 
 def test_study_prompts_extend_frozen_tasks_with_only_declared_fields(study_fixture):

@@ -813,6 +813,19 @@ documented in [study preparation](../benchmark/study_preparation.md).
 
 ### 13.1 已确认范围与未确认资源
 
+#### B0 reasoning-effort probe completed
+
+研究者批准 B0（192 请求、7M token、单请求输出 32,768、超时 900 秒）。8 布局 × 2 forward＋1 goal ×
+GPT-5-mini/GPT-5 × minimal/low/medium/high 全部完成，用 1,968,291 token（约 $10 标价）。所有格
+静止终态 2r 内 0/16、goal 1r 内 0/8；预注册规则下没有档明显好于 minimal，B1/B2/C 用 minimal。
+更高强度只改善短时帧位置、接触 F1 和 mini 的合法率，GPT-5 输出 token 增加约 7–65 倍；high 约三分之一
+请求用满 32k 被截断。
+
+运行中一次中断：模拟器把 HOME 指向隔离目录，导致一小时后 Azure CLI token 刷新失败；CLI 已固定
+`AZURE_CONFIG_DIR`。1 条从未发出的预留经研究者批准后释放，备份与记录在运行目录 `interventions/`。
+完成后禁止 HTTP/模拟器重跑新增 0。见 [B0 结果](b0_effort_probe.md)。B1/B2/C 预期合计约 13.5M token、
+约 $17，执行前另行确认额度。
+
 #### B0/B/C code and mock-test preparation
 
 研究者确认路线 B0→B1/B2→C 与推荐档，要求先写代码和 mock 测试、不调用 API；B0 额度另行确认。

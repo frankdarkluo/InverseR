@@ -1,6 +1,7 @@
 import argparse
 import json
 import logging
+import os
 from collections.abc import Callable
 from pathlib import Path
 
@@ -10,6 +11,9 @@ EFFORTS = ["minimal", "low", "medium", "high"]
 def _with_azure_token(run: Callable[[Callable[[], str]], dict[str, object]]) -> dict[str, object]:
     from azure.identity import DefaultAzureCredential, get_bearer_token_provider
 
+    # The simulator later points HOME at an isolated Pooltool home; token refreshes from the
+    # Azure CLI must keep reading the real login, so pin its config directory first.
+    os.environ.setdefault("AZURE_CONFIG_DIR", str(Path.home() / ".azure"))
     logging.getLogger("azure").setLevel(logging.WARNING)
     logging.getLogger("httpx").setLevel(logging.WARNING)
     with DefaultAzureCredential(exclude_interactive_browser_credential=True) as credential:
