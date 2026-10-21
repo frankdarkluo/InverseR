@@ -137,3 +137,42 @@ def test_feedback_config_requires_room_for_every_attempt():
         FeedbackStudyConfig(max_model_requests=1407)
     with pytest.raises(ValueError, match="distinct"):
         FeedbackStudyConfig(conditions=("genuine", "genuine"))
+
+
+def test_credential_failure_mid_episode_is_replayed_from_the_ledger(
+    tmp_path, monkeypatch, study_fixture
+):
+    panel, native = feedback_inputs(tmp_path, monkeypatch, study_fixture)
+    calls = []
+    handler = corrective_handler(panel, calls)
+    broken = {"value": False}
+
+    def counting(request):
+        response = handler(request)
+        broken["value"] = len(calls) == 2
+        return response
+
+    def token():
+        if broken["value"]:
+            raise RuntimeError("expired login")
+        return "fixture-token"
+
+    config = FeedbackStudyConfig(
+        layouts=4, max_attempts=3, conditions=("reflection",), max_model_requests=24
+    )
+    output = tmp_path / "data/credential"
+    arguments = (panel, native, azure_inventory(tmp_path), output, config)
+    stopped = run_feedback_study(
+        *arguments,
+        endpoint_index=0,
+        execute=True,
+        token_provider=token,
+        transport=httpx.MockTransport(counting),
+    )
+    assert stopped["stop_error"] == "credential_unavailable"
+    assert stopped["completed_episodes"] == 0 and len(calls) == 2
+    broken["value"] = False
+    resumed = run_feedback_study(*arguments, **kwargs_for(handler))
+    assert resumed["status"] == "completed"
+    # The interrupted episode replays its two billed attempts from the ledger.
+    assert resumed["new_model_requests"] == 4 * 3 * 2 - 2 and len(calls) == 24

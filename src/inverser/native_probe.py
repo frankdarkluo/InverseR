@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from contextlib import ExitStack
 from functools import partial
+from math import dist
 from pathlib import Path
 from time import monotonic
 from typing import Literal, Self
@@ -13,19 +14,27 @@ import numpy as np
 from pydantic import Field, model_validator
 
 from inverser.azure_study import MODELS, _score_row, select_pilot_requests
+from inverser.bank_study import free_roll_resting_state
 from inverser.diagnostic_panel import (
     PanelRequest,
     load_synthetic_panel_call,
     validate_diagnostic_panel,
 )
-from inverser.diagnostics import ForwardScore, InterventionScore, score_intervention_pair
+from inverser.diagnostics import (
+    ForwardScore,
+    InterventionScore,
+    PairedMeasurement,
+    score_forward,
+    score_intervention_pair,
+    summarize_paired,
+)
 from inverser.evaluation import BudgetLimits, TrialLedger, recorded_replay, request_model
 from inverser.metrics import EndpointScore
 from inverser.model_adapters import ModelReply
 from inverser.physics import SimulationFailure, SnookerSimulator
 from inverser.runtime import file_sha256, fingerprint, write_json
 from inverser.schemas import CueAction, Record, ShotRecord
-from inverser.study import ForwardInput, ForwardSubmission
+from inverser.study import ForwardInput, ForwardSubmission, PredictedFrame
 from inverser.study_calls import (
     TOLERANCE_RADII,
     OracleForwardInput,
@@ -33,6 +42,7 @@ from inverser.study_calls import (
     ReasoningEffort,
     StudyAdapter,
     StudyCall,
+    credential_ready,
     endpoint_tolerance_profile,
     forward_tolerance_profile,
     guarded_request,
@@ -69,8 +79,6 @@ class NativeProbeConfig(Record):
             raise ValueError("Reasoning efforts must be distinct and nonempty")
         if self.design == "effort_probe" and self.layouts > 8:
             raise ValueError("The effort probe is limited to the eight-layout API common subset")
-        if self.design == "forward_intervention" and len(efforts) != 1:
-            raise ValueError("Forward/intervention runs use the single effort fixed after B0")
         if self.request_token_reservation < self.max_output_tokens:
             raise ValueError("Each token reservation must cover its completion cap")
         if self.max_model_requests < self.planned_requests():
@@ -216,10 +224,160 @@ def _counts(profiles: list[dict[str, bool]]) -> dict[str, int]:
     return {str(k): sum(profile[str(k)] for profile in profiles) for k in TOLERANCE_RADII}
 
 
+def forward_baselines(panel: Path, request: PanelRequest) -> dict[str, float | None]:
+    """Resting max error (radii) of two trivial forecasters: nothing moves, straight free roll."""
+    forward = load_synthetic_panel_call(panel, request).input
+    if not isinstance(forward, ForwardInput):
+        raise ValueError("Forward baselines need a blind-forward request")
+    labels = json.loads((panel / "private" / f"{request.case_id}.json").read_text())
+    item = labels["forward_labels"][request.condition]
+    truth = ForwardSubmission.model_validate(item["truth"])
+    radius = forward.physics.table.ball_radius_m
+    static = score_forward(
+        ForwardSubmission(
+            frames=tuple(
+                PredictedFrame(time_s=time, state=forward.initial)
+                for time in forward.sample_times_s
+            ),
+            resting_state=forward.initial,
+            events=(),
+        ),
+        truth,
+        initial=forward.initial,
+        moving_ball_ids=tuple(item["moving_ball_ids"]),
+        position_tolerance_m=radius,
+        event_time_tolerance_s=0.02,
+    ).resting_max_position_error_m
+    rest = {ball.ball_id: ball for ball in truth.resting_state.balls}
+    free = [
+        dist(ball.xy_m, reference)
+        for ball in free_roll_resting_state(forward.initial, forward.action, forward.physics).balls
+        if ball.xy_m is not None and (reference := rest[ball.ball_id].xy_m) is not None
+    ]
+    return {
+        "static": static / radius if static is not None else None,
+        "free_roll": max(free) / radius if free else None,
+    }
+
+
+def _resting_error(row: ProbeRow, radius: float) -> float | None:
+    if row.forward_score is None or row.forward_score.resting_max_position_error_m is None:
+        return None
+    return row.forward_score.resting_max_position_error_m / radius
+
+
+def _median(values: list[float]) -> float | None:
+    return float(np.median(values)) if values else None
+
+
+def compare_arms(panel: Path, rows: list[ProbeRow]) -> list[dict[str, object]]:
+    """Pre-registered paired B1 contrasts on the same case and action condition."""
+    radius = json.loads((panel / "manifest.json").read_text())["resolved_physics"][0]["config"][
+        "ball_radius_m"
+    ]
+    groups = {
+        item["case_id"]: item["source_group"]
+        for item in json.loads((panel / "private/selection.json").read_text())["synthetic"]
+    }
+    arms: dict[tuple[str, str, str, str], dict[tuple[str, str], ProbeRow]] = defaultdict(dict)
+    for row in rows:
+        if row.task == "synthetic_forward":
+            arms[row.reasoning_effort, row.information, row.view, row.model][
+                row.case_id, row.condition
+            ] = row
+    efforts = sorted({row.reasoning_effort for row in rows})
+    contrasts: list[tuple[str, str, str, str, str, str]] = []
+    for model in MODELS:
+        for effort in efforts:
+            if effort != "minimal" and "minimal" in efforts:
+                contrasts.append(("reasoning_effort", model, effort, "minimal", "native", "native"))
+            contrasts.append(
+                (
+                    "oracle_kinematics",
+                    model,
+                    effort,
+                    effort,
+                    "oracle_post_impact_kinematics",
+                    "native",
+                )
+            )
+            contrasts.append(("bev_view", model, effort, effort, "native", "native"))
+    result: list[dict[str, object]] = []
+    for name, model, effort_a, effort_b, info_a, info_b in contrasts:
+        view_a = "bev" if name == "bev_view" else "structured"
+        left = arms.get((effort_a, info_a, view_a, model), {})
+        right = arms.get((effort_b, info_b, "structured", model), {})
+        keys = sorted(left.keys() & right.keys())
+        if not keys:
+            continue
+        errors = [
+            (key, a, b)
+            for key in keys
+            if (a := _resting_error(left[key], radius)) is not None
+            and (b := _resting_error(right[key], radius)) is not None
+        ]
+
+        def success(row: ProbeRow) -> float:
+            return float(bool(row.forward_tolerances and row.forward_tolerances["resting"]["5.0"]))
+
+        f1 = [
+            score_a.contacts.f1 - score_b.contacts.f1
+            for key in keys
+            if (score_a := left[key].forward_score) is not None
+            and (score_b := right[key].forward_score) is not None
+        ]
+        result.append(
+            {
+                "contrast": name,
+                "model": model,
+                "arm_a": [effort_a, info_a, view_a],
+                "arm_b": [effort_b, info_b, "structured"],
+                "planned_pairs": len(keys),
+                "error_pairs": len(errors),
+                "median_resting_error_difference_radii": _median([a - b for _, a, b in errors]),
+                "improved_pairs": sum(a < b for _, a, b in errors),
+                "resting_error_difference": summarize_paired(
+                    tuple(
+                        PairedMeasurement(pair_id="/".join(key), group_id=groups[key[0]], a=a, b=b)
+                        for key, a, b in errors
+                    ),
+                    seed=20261020,
+                ).model_dump(mode="json")
+                if errors
+                else None,
+                "resting_success_5r_difference": summarize_paired(
+                    tuple(
+                        PairedMeasurement(
+                            pair_id="/".join(key),
+                            group_id=groups[key[0]],
+                            a=success(left[key]),
+                            b=success(right[key]),
+                        )
+                        for key in keys
+                    ),
+                    seed=20261020,
+                ).model_dump(mode="json"),
+                "mean_contact_f1_difference": float(np.mean(f1)) if f1 else None,
+            }
+        )
+    return result
+
+
 def summarize_probe(panel: Path, rows: list[ProbeRow]) -> dict[str, object]:
     radius = json.loads((panel / "manifest.json").read_text())["resolved_physics"][0]["config"][
         "ball_radius_m"
     ]
+    index = {
+        request.request_id: request
+        for request in (
+            PanelRequest.model_validate_json(line)
+            for line in (panel / "request_index.jsonl").open()
+        )
+    }
+    baselines = {
+        request_id: forward_baselines(panel, index[request_id])
+        for request_id in sorted({r.request_id for r in rows if r.task == "synthetic_forward"})
+    }
     groups: dict[tuple[str, str, str, str], list[ProbeRow]] = defaultdict(list)
     for row in rows:
         groups[row.reasoning_effort, row.information, row.view, row.model].append(row)
@@ -257,6 +415,25 @@ def summarize_probe(panel: Path, rows: list[ProbeRow]) -> dict[str, object]:
                 "resting_success_by_tolerance_radii": _counts(
                     [r.forward_tolerances["resting"] for r in forwards if r.forward_tolerances]
                 ),
+                "baseline_median_resting_error_radii": {
+                    name: _median(
+                        [
+                            value
+                            for row in forwards
+                            if (value := baselines[row.request_id][name]) is not None
+                        ]
+                    )
+                    for name in ("static", "free_roll")
+                },
+                **{
+                    f"beats_{name}_baseline": sum(
+                        (error := _resting_error(row, radius)) is not None
+                        and (reference := baselines[row.request_id][name]) is not None
+                        and error < reference
+                        for row in forwards
+                    )
+                    for name in ("static", "free_roll")
+                },
                 "goal_requests": len(goals),
                 "goal_success_by_tolerance_radii": _counts(
                     [row.goal_tolerances for row in goals if row.goal_tolerances]
@@ -269,7 +446,8 @@ def summarize_probe(panel: Path, rows: list[ProbeRow]) -> dict[str, object]:
         if row.forward_score is not None and row.reply is not None:
             key = row.reasoning_effort, row.information, row.view, row.model, row.case_id
             pairs[key][row.condition] = row
-    interventions: dict[tuple[str, str, str, str], list[InterventionScore]] = defaultdict(list)
+    interventions: dict[tuple[str, str, str, str], list[tuple[InterventionScore, float | None]]]
+    interventions = defaultdict(list)
     for (effort, information, view, model, case_id), pair in sorted(pairs.items()):
         if set(pair) != {"base_action", "intervened_action"}:
             continue
@@ -285,30 +463,45 @@ def summarize_probe(panel: Path, rows: list[ProbeRow]) -> dict[str, object]:
             )
             if request.request_id == pair["base_action"].request_id
         )
+        truths = [
+            ForwardSubmission.model_validate(labels[name]["truth"])
+            for name in ("base_action", "intervened_action")
+        ]
+        options = {
+            "initial": load_synthetic_panel_call(panel, request).input.initial,
+            "moving_ball_ids": tuple(
+                sorted(
+                    set(labels["base_action"]["moving_ball_ids"])
+                    | set(labels["intervened_action"]["moving_ball_ids"])
+                )
+            ),
+            "position_tolerance_m": radius,
+            "event_time_tolerance_s": 0.02,
+        }
+        # Predicting no change at all: the response baseline any action-sensitive model must beat.
+        unchanged = score_intervention_pair(truths[0], truths[0], *truths, **options)
         interventions[effort, information, view, model].append(
-            score_intervention_pair(
-                ForwardSubmission.model_validate_json(base.content),
-                ForwardSubmission.model_validate_json(altered.content),
-                ForwardSubmission.model_validate(labels["base_action"]["truth"]),
-                ForwardSubmission.model_validate(labels["intervened_action"]["truth"]),
-                initial=load_synthetic_panel_call(panel, request).input.initial,
-                moving_ball_ids=tuple(
-                    sorted(
-                        set(labels["base_action"]["moving_ball_ids"])
-                        | set(labels["intervened_action"]["moving_ball_ids"])
-                    )
+            (
+                score_intervention_pair(
+                    ForwardSubmission.model_validate_json(base.content),
+                    ForwardSubmission.model_validate_json(altered.content),
+                    *truths,
+                    **options,
                 ),
-                position_tolerance_m=radius,
-                event_time_tolerance_s=0.02,
+                unchanged.moving_response_mean_error_m / radius
+                if unchanged.moving_response_mean_error_m is not None
+                else None,
             )
         )
     summaries = []
-    for (effort, information, view, model), pair_scores in sorted(interventions.items()):
+    for (effort, information, view, model), scored_pairs in sorted(interventions.items()):
+        pair_scores = [score for score, _ in scored_pairs]
         responses = [
             score.moving_response_mean_error_m / radius
             for score in pair_scores
             if score.moving_response_mean_error_m is not None
         ]
+        unchanged_values = [value for _, value in scored_pairs if value is not None]
         summaries.append(
             {
                 "reasoning_effort": effort,
@@ -319,10 +512,15 @@ def summarize_probe(panel: Path, rows: list[ProbeRow]) -> dict[str, object]:
                 "joint_positions_successes": sum(s.joint_positions_success for s in pair_scores),
                 "joint_events_successes": sum(s.joint_events_success for s in pair_scores),
                 "status_patterns_correct": sum(s.status_patterns_correct for s in pair_scores),
-                "median_response_error_radii": float(np.median(responses)) if responses else None,
+                "median_response_error_radii": _median(responses),
+                "no_change_baseline_median_response_error_radii": _median(unchanged_values),
             }
         )
-    return {"by_arm": arms, "interventions": summaries}
+    return {
+        "by_arm": arms,
+        "interventions": summaries,
+        "paired_contrasts": compare_arms(panel, rows),
+    }
 
 
 def run_native_probe(
@@ -431,6 +629,9 @@ def run_native_probe(
                         rows.append(row)
                         continue
                     if stop_error or (limit_jobs is not None and completed >= limit_jobs):
+                        continue
+                    if not credential_ready(token_provider):
+                        stop_error = "credential_unavailable"
                         continue
                     started = monotonic()
                     adapter = adapters[item.reasoning_effort, model]

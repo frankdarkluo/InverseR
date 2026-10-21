@@ -395,6 +395,20 @@ def guarded_request(send: Callable[[], ModelReply]) -> RequestOutcome:
         return RequestOutcome(reply=None, error_code=code, stop_error=code)
 
 
+class CredentialUnavailable(RuntimeError):
+    pass
+
+
+def credential_ready(token_provider: Callable[[], str]) -> bool:
+    """Refresh the credential before a request is reserved, so a failure leaves no stuck row."""
+    try:
+        token_provider()
+    except Exception:
+        LOGGER.exception("Credential refresh failed; stopping before reserving another request")
+        return False
+    return True
+
+
 def producer_hashes(*names: str) -> dict[str, str]:
     return {name: file_sha256(Path(__file__).with_name(name)) for name in names}
 

@@ -6,6 +6,15 @@ InverseR 已接受 G1 的有限分层证据范围，并锁定小型开发诊断�
 
 ## Research：研究路线与文献
 
+- [C 反馈归因结果](research/c_feedback_attribution.md)：32 布局 × 3 种反馈条件、192 局；
+  模型确实利用真实反馈，但效率低于几何起点＋数值优化。
+
+- [B2 共同 bank 选择结果](research/b2_bank_selection.md)：64 布局 × 8 候选、1,440 请求；
+  forecast→selector 与直接选择都没有显著好于随机，排序只到直线近似的水平。
+
+- [B1 后果预测与干预结果](research/b1_forward_intervention.md)：64 布局、1,536 请求；
+  终态精度为零，low 优于 minimal，oracle 运动学只在 minimal 下有帮助，附平凡基线与配对比较。
+
 - [B0 推理强度探针结果](research/b0_effort_probe.md)：8 布局、两模型、四档推理强度共 192 请求；
   所有格终态精度为零，按预注册规则 B1/B2/C 用 minimal；token、截断、耗时与中断记录。
 

@@ -51,6 +51,7 @@ from inverser.study_calls import (
     StudyAdapter,
     StudyCall,
     create_artifact_dir,
+    credential_ready,
     forward_tolerance_profile,
     guarded_request,
     load_job,
@@ -784,6 +785,9 @@ def run_bank_study(
                         rows.append(row)
                         continue
                     if stop_error or (limit_jobs is not None and completed >= limit_jobs):
+                        continue
+                    if not credential_ready(token_provider):
+                        stop_error = "credential_unavailable"
                         continue
                     started = monotonic()
                     call = load_bank_call(panel, request)

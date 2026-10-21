@@ -33,11 +33,13 @@ from inverser.study import (
 from inverser.study_calls import (
     TOLERANCE_RADII,
     AttemptFeedback,
+    CredentialUnavailable,
     FeedbackGoalInput,
     ReasoningEffort,
     SimulatedOutcome,
     StudyAdapter,
     StudyCall,
+    credential_ready,
     endpoint_tolerance_profile,
     guarded_request,
     load_job,
@@ -207,6 +209,7 @@ def run_episode(
     ledger: TrialLedger,
     config: FeedbackStudyConfig,
     run_hash: str,
+    token_provider: Callable[[], str],
 ) -> tuple[EpisodeRow, str | None]:
     started = monotonic()
     history: list[AttemptFeedback] = []
@@ -226,6 +229,9 @@ def run_episode(
                 history=tuple(history),
             ),
         )
+        if not credential_ready(token_provider):
+            # Earlier attempts are cached in the ledger, so the episode replays on resume.
+            raise CredentialUnavailable("Credential refresh failed before an episode request")
         outcome = guarded_request(partial(request_study_model, adapter, call, ledger))
         if outcome.reply is None or outcome.error_code is not None:
             attempts.append(
@@ -492,17 +498,22 @@ def run_feedback_study(
                             simulators[key] = SnookerSimulator(case.physics)
                             if goal.physics != public_physics(simulators[key]):
                                 raise ValueError("Feedback runs require the declared known physics")
-                        row, stop_error = run_episode(
-                            case,
-                            goal,
-                            model,
-                            condition,
-                            adapters[model],
-                            simulators[key],
-                            ledger,
-                            config,
-                            run_hash,
-                        )
+                        try:
+                            row, stop_error = run_episode(
+                                case,
+                                goal,
+                                model,
+                                condition,
+                                adapters[model],
+                                simulators[key],
+                                ledger,
+                                config,
+                                run_hash,
+                                token_provider,
+                            )
+                        except CredentialUnavailable:
+                            stop_error = "credential_unavailable"
+                            continue
                         save_job(path, run_hash, row.model_dump(mode="json"))
                         rows.append(row)
                         completed += 1

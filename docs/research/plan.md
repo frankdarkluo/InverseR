@@ -813,6 +813,17 @@ documented in [study preparation](../benchmark/study_preparation.md).
 
 ### 13.1 已确认范围与未确认资源
 
+#### B1/B2/C completed at low effort
+
+研究者选择偏离 B0 预注册规则：B1/B2/C 用 low，B1 另保留 minimal 臂；执行前存档 `6196aac`，并让
+runner 在预留请求前先刷新凭据。B1（1,536 请求、6.0M token）：所有臂终态 2r 内 0/128；GPT-5 low 比
+minimal 误差小（−10.1r，[−14.7, −5.2]），约等于直线近似；oracle 击后运动学只在 minimal 下有帮助；
+干预响应不优于"预测不变"；GPT-5 low 看图时多拒绝给坐标。B2（1,440 请求、5.8M token）：8 选 1 bank
+中 GPT-5 两种用法都是 13/64，随机期望 12.5%、直线近似 12/64，区间含随机水平。C（192 局、1,388 请求、
+4.8M token）：GPT-5 genuine 6/32，shuffled/reflection 0/32（+18.8 个百分点，[6.2, 31.2]），同案例
+几何＋Powell 8 次执行为 10/32。B 系列合计 4,556 请求、18.5M token、约 $51。见
+[B1](b1_forward_intervention.md)、[B2](b2_bank_selection.md)、[C](c_feedback_attribution.md)。
+
 #### B0 reasoning-effort probe completed
 
 研究者批准 B0（192 请求、7M token、单请求输出 32,768、超时 900 秒）。8 布局 × 2 forward＋1 goal ×

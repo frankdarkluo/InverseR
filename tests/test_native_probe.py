@@ -1,4 +1,5 @@
 import json
+import sqlite3
 
 import httpx
 import pytest
@@ -113,36 +114,47 @@ def test_forward_intervention_adds_replayed_oracle_kinematics(tmp_path, monkeypa
     config = NativeProbeConfig(
         design="forward_intervention",
         layouts=4,
-        reasoning_efforts=("medium",),
-        max_model_requests=48,
+        reasoning_efforts=("low", "minimal"),
+        max_model_requests=96,
     )
     kwargs = execute_kwargs(panel, calls)
     report = run_native_probe(panel, source, output, config, **kwargs)
-    assert report["status"] == "completed" and len(calls) == 48
+    assert report["status"] == "completed" and len(calls) == 96
     tasks = [prompt_task(request) for request in calls]
     oracle = [task for task in tasks if "cue_ball_post_impact_state" in task]
-    assert len(oracle) == 16 and all("goal" not in task for task in tasks)
+    assert len(oracle) == 32 and all("goal" not in task for task in tasks)
     for task in oracle:
         labels = json.loads((panel / "private" / f"{task['case_id']}.json").read_text())
         if task["action"] == labels["forward_labels"]["base_action"]["action"]:
             state = task["cue_ball_post_impact_state"]
             assert state["velocity_mps"] == labels["record"]["cue_initial_velocity_mps"]
-    assert sum("image_url" in json.dumps(json.loads(r.content)) for r in calls) == 16
-    arms = {(arm["information"], arm["view"], arm["model"]): arm for arm in report["by_arm"]}
-    assert len(arms) == 6
-    assert all(arm["frames_success_by_tolerance_radii"]["1.0"] == 8 for arm in arms.values())
+    assert sum("image_url" in json.dumps(json.loads(r.content)) for r in calls) == 32
+    assert len(report["by_arm"]) == 12
+    for arm in report["by_arm"]:
+        assert arm["frames_success_by_tolerance_radii"]["1.0"] == 8
+        assert arm["beats_static_baseline"] == 8
+        assert set(arm["baseline_median_resting_error_radii"]) == {"static", "free_roll"}
     assert report["physics_usage_by_role"]["offline_reference"]["evaluations"] == 8
     assert {item["information"] for item in report["interventions"]} == {
         "native",
         "oracle_post_impact_kinematics",
     }
+    assert all(
+        item["no_change_baseline_median_response_error_radii"] is not None
+        for item in report["interventions"]
+    )
+    contrasts = {(c["contrast"], c["model"], c["arm_a"][0]) for c in report["paired_contrasts"]}
+    assert ("reasoning_effort", "gpt-5", "low") in contrasts and len(contrasts) == 10
+    for contrast in report["paired_contrasts"]:
+        assert contrast["planned_pairs"] == contrast["error_pairs"] == 8
+        assert contrast["median_resting_error_difference_radii"] == 0
     monkeypatch.setattr(
         native_probe,
         "SnookerSimulator",
         lambda *args: pytest.fail("Completed probe jobs must not replay oracle kinematics"),
     )
     repeated = run_native_probe(panel, source, output, config, **kwargs)
-    assert repeated["new_model_requests"] == 0 and len(calls) == 48
+    assert repeated["new_model_requests"] == 0 and len(calls) == 96
 
 
 def test_probe_config_keeps_the_declared_design_bounds():
@@ -158,9 +170,55 @@ def test_probe_config_keeps_the_declared_design_bounds():
     )
     with pytest.raises(ValueError, match="eight-layout"):
         NativeProbeConfig(layouts=12, max_model_requests=4000)
-    with pytest.raises(ValueError, match="single effort"):
-        NativeProbeConfig(design="forward_intervention", layouts=4, max_model_requests=4000)
+    assert (
+        NativeProbeConfig(
+            design="forward_intervention",
+            layouts=64,
+            reasoning_efforts=("low", "minimal"),
+            max_model_requests=1536,
+        ).planned_requests()
+        == 1536
+    )
     with pytest.raises(ValueError, match="cover every planned"):
         NativeProbeConfig(max_model_requests=191)
     with pytest.raises(ValueError, match="completion cap"):
         NativeProbeConfig(request_token_reservation=16384)
+
+
+def test_credential_failure_stops_before_reserving_and_resumes_cleanly(
+    tmp_path, monkeypatch, study_fixture
+):
+    panel = probe_panel(tmp_path, monkeypatch, study_fixture)
+    source = azure_inventory(tmp_path)
+    output = tmp_path / "data/credential"
+    calls = []
+    handler = truth_handler(panel, calls)
+    broken = {"value": False}
+
+    def counting(request):
+        response = handler(request)
+        broken["value"] = len(calls) >= 2
+        return response
+
+    def token():
+        if broken["value"]:
+            raise RuntimeError("expired login")
+        return "fixture-token"
+
+    config = NativeProbeConfig(layouts=4, reasoning_efforts=("minimal",), max_model_requests=24)
+    kwargs = {"endpoint_index": 0, "execute": True, "transport": httpx.MockTransport(counting)}
+    stopped = run_native_probe(panel, source, output, config, token_provider=token, **kwargs)
+    assert stopped["stop_error"] == "credential_unavailable" and len(calls) == 2
+    ledger = sqlite3.connect(output / "ledger.sqlite")
+    assert ledger.execute("SELECT DISTINCT status FROM requests").fetchall() == [("complete",)]
+    ledger.close()
+    broken["value"] = False
+    resumed = run_native_probe(
+        panel,
+        source,
+        output,
+        config,
+        token_provider=lambda: "fixture-token",
+        **{**kwargs, "transport": httpx.MockTransport(handler)},
+    )
+    assert resumed["status"] == "completed" and len(calls) == 24
