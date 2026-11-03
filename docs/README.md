@@ -6,6 +6,23 @@ InverseR 已接受 G1 的有限分层证据范围，并锁定小型开发诊断�
 
 ## Research：研究路线与文献
 
+- [论文主线与引言设计](research/paper_framing.md)：主线"知道会发生什么不等于知道该怎么做"，
+  同实例能力链 L1–L5，逆向推理为主打任务；六段式引言、两种发现写法、Table 1 草稿与待补清单。
+
+- [正式测试：五个模型的能力链结果](research/formal_model_sweep.md)：GPT-5.5/5.4、o4-mini（low）与
+  Kimi-K2.6、DeepSeek-V4-Pro（none）；直接出杆 ≤1/200（几何 77/200），排序不优于直线近似，只有 GPT
+  旗舰能利用真实反馈（36/64、29/64）；统一重算、事故与事后诊断。
+
+- [正式测试：GPT-5.5 结果](research/formal_gpt55_results.md)：后果预测 63% 优于直线近似但 2r 内
+  仅 2%，排序高于随机但不优于直线近似，直接出杆 2/200；反馈利用 genuine 36/64，比同预算几何＋Powell 多
+  15.6 个百分点。
+
+- [正式测试集协议与预注册分析](research/formal_test_protocol.md)：新种子生成、与开发数据零重叠的
+  200 个布局；forward v2、强干预、候选完整排序；5 项预注册主要分析与请求量。
+
+- [实验 A：搜索起点顺序消融](research/start_order_ablation.md)：32 个开发布局、12 个起点臂；
+  预注册的 10/12/12 完全命中，v1 的下降是调度效应；模型动作作为起点差于几何、不优于随机。
+
 - [C 反馈归因结果](research/c_feedback_attribution.md)：32 布局 × 3 种反馈条件、192 局；
   模型确实利用真实反馈，但效率低于几何起点＋数值优化。
 

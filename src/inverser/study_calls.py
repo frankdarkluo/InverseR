@@ -3,6 +3,7 @@ import logging
 from collections import Counter
 from collections.abc import Callable
 from pathlib import Path
+from time import monotonic, sleep
 from typing import Literal, Self
 
 import httpx
@@ -25,7 +26,7 @@ from inverser.model_adapters import (
     _token,
 )
 from inverser.runtime import PROJECT_ROOT, check_storage, file_sha256, fingerprint, write_json
-from inverser.schemas import Layout, Record
+from inverser.schemas import BallKind, Layout, Record
 from inverser.study import (
     CandidateAction,
     ForwardInput,
@@ -38,7 +39,8 @@ from inverser.study import (
 from inverser.study_runner import JobEnvelope
 
 LOGGER = logging.getLogger(__name__)
-ReasoningEffort = Literal["minimal", "low", "medium", "high"]
+# "none" turns thinking off on models that support it (Azure-hosted Kimi and DeepSeek).
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
 # Pre-registered sensitivity tolerances; the 1-radius primary threshold is unchanged.
 TOLERANCE_RADII = (0.25, 0.5, 1.0, 2.0, 5.0)
 KINEMATICS_NOTE = (
@@ -61,6 +63,10 @@ REFLECTION_NOTE = (
 FIRST_ATTEMPT_NOTE = (
     "This is the first of max_attempts attempts. Submit one cue action; later attempts may "
     "revise it."
+)
+RANKING_NOTE = (
+    "Rank every candidate_id from best to worst by how closely its single execution from the "
+    "initial state reaches the goal state; list each candidate exactly once."
 )
 
 
@@ -93,6 +99,55 @@ def study_azure_backends(
     )
 
 
+# Azure-hosted partner models report their bare name (Kimi) or a fixed placeholder (DeepSeek)
+# instead of "<model>-<version>"; the deployment name still routes each request.
+REPORTED_MODEL_ID = {"Kimi-K2.6": "Kimi-K2.6", "DeepSeek-V4-Pro": "default"}
+
+
+def azure_model_backends(
+    source: Path,
+    endpoint_index: int,
+    models: tuple[str, ...],
+    *,
+    reasoning_effort: ReasoningEffort,
+    max_output_tokens: int,
+    request_token_reservation: int,
+    timeout_s: float,
+) -> tuple[StudyBackendConfig, ...]:
+    """One GlobalStandard deployment per named model, as declared in the Azure inventory."""
+    endpoints = json.loads(source.read_text())["azure_openai_endpoints"]
+    if not 0 <= endpoint_index < len(endpoints):
+        raise ValueError("Azure endpoint index is outside the supplied inventory")
+    endpoint = endpoints[endpoint_index]
+    backends = []
+    for model in models:
+        matches = [
+            item
+            for item in endpoint["deployments"]
+            if item["model"] == model and item["sku"] == "GlobalStandard"
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"Endpoint must declare exactly one GlobalStandard {model} deployment")
+        deployment = matches[0]
+        backends.append(
+            StudyBackendConfig(
+                kind="api",
+                alias=model,
+                model_id=REPORTED_MODEL_ID.get(model, f"{model}-{deployment['version']}"),
+                model_revision=deployment["version"],
+                base_url=endpoint["endpoint"],
+                provider="azure_openai",
+                deployment_name=deployment["deployment_name"],
+                api_version=endpoint["api_version"],
+                reasoning_effort=reasoning_effort,
+                max_output_tokens=max_output_tokens,
+                request_token_reservation=request_token_reservation,
+                timeout_s=timeout_s,
+            )
+        )
+    return tuple(backends)
+
+
 class PostImpactKinematics(Record):
     velocity_mps: tuple[float, float, float]
     angular_velocity_radps: tuple[float, float, float]
@@ -120,6 +175,61 @@ class BankSelectionInput(Record):
 
 class BankSelectionSubmission(Record):
     candidate_id: str = Field(min_length=1)
+
+
+class PredictedBall(Record):
+    ball_id: str = Field(min_length=1)
+    kind: BallKind
+    status: Literal["on_table", "pocketed"]
+    xy_m: tuple[float, float] | None = None
+
+    @model_validator(mode="after")
+    def check_position(self) -> Self:
+        if (self.status == "on_table") != (self.xy_m is not None):
+            raise ValueError("An on-table prediction needs a position and a pocketed one has none")
+        return self
+
+
+class PredictedLayout(Record):
+    balls: tuple[PredictedBall, ...] = Field(min_length=1, max_length=22)
+
+
+class PredictedFrameV2(Record):
+    time_s: float = Field(ge=0)
+    state: PredictedLayout
+
+
+# Prompt-facing schema: a class docstring here would be sent to the model as its description.
+# Unlike ForwardSubmission it has no third ball status, so every initial ball must be placed.
+class ForwardPrediction(Record):
+    frames: tuple[PredictedFrameV2, ...] = Field(min_length=1, max_length=8)
+    resting_state: PredictedLayout
+    events: tuple[SemanticContact, ...]
+
+    def submission(self) -> ForwardSubmission:
+        return ForwardSubmission.model_validate(self.model_dump(mode="json"))
+
+
+class ForwardQuery(Record):
+    schema_version: Literal["study-forward-v2"] = "study-forward-v2"
+    forward: ForwardInput
+    cue_ball_post_impact: PostImpactKinematics | None = None
+
+
+class BankRankingInput(Record):
+    schema_version: Literal["study-bank-ranking-v1"] = "study-bank-ranking-v1"
+    goal: GoalInput
+    candidates: tuple[CandidateAction, ...] = Field(min_length=2, max_length=32)
+
+    @model_validator(mode="after")
+    def validate_candidates(self) -> Self:
+        if len({candidate.candidate_id for candidate in self.candidates}) != len(self.candidates):
+            raise ValueError("Candidate IDs must be unique")
+        return self
+
+
+class BankRankingSubmission(Record):
+    ranking: tuple[str, ...] = Field(min_length=2, max_length=32)
 
 
 class SimulatedOutcome(Record):
@@ -173,21 +283,32 @@ class FeedbackGoalInput(Record):
 
 class StudyCall(Record):
     view: Literal["structured", "bev"]
-    input: OracleForwardInput | BankSelectionInput | FeedbackGoalInput = Field(
-        discriminator="schema_version"
-    )
+    input: (
+        OracleForwardInput
+        | BankSelectionInput
+        | FeedbackGoalInput
+        | ForwardQuery
+        | BankRankingInput
+    ) = Field(discriminator="schema_version")
     images: tuple[RenderedAsset, ...] = ()
 
     @model_validator(mode="after")
     def validate_view(self) -> Self:
-        if self.view == "bev" and not isinstance(self.input, BankSelectionInput):
-            raise ValueError("Only bank selection has an image variant in this study")
+        image_inputs = (BankSelectionInput, BankRankingInput, ForwardQuery)
+        if self.view == "bev" and not isinstance(self.input, image_inputs):
+            raise ValueError("This study input has no image variant")
+        if isinstance(self.input, ForwardQuery) and (
+            self.view == "bev" and self.input.cue_ball_post_impact is not None
+        ):
+            raise ValueError("Oracle kinematics are given only with the structured view")
         self.base_call()
         return self
 
     def base_call(self) -> ModelCall:
         if isinstance(self.input, OracleForwardInput):
             return ModelCall(view="structured", input=self.input.forward, images=self.images)
+        if isinstance(self.input, ForwardQuery):
+            return ModelCall(view=self.view, input=self.input.forward, images=self.images)
         return ModelCall(view=self.view, input=self.input.goal, images=self.images)
 
     def prompt(self) -> str:
@@ -200,6 +321,19 @@ class StudyCall(Record):
                 "meaning": KINEMATICS_NOTE,
             }
             schema = ForwardSubmission.model_json_schema()
+        elif isinstance(self.input, ForwardQuery):
+            if self.input.cue_ball_post_impact is not None:
+                data["cue_ball_post_impact_state"] = {
+                    **self.input.cue_ball_post_impact.model_dump(mode="json"),
+                    "meaning": KINEMATICS_NOTE,
+                }
+            schema = ForwardPrediction.model_json_schema()
+        elif isinstance(self.input, BankRankingInput):
+            data["candidate_actions"] = [
+                candidate.model_dump(mode="json") for candidate in self.input.candidates
+            ]
+            data["ranking_rule"] = RANKING_NOTE
+            schema = BankRankingSubmission.model_json_schema()
         elif isinstance(self.input, BankSelectionInput):
             data["candidate_actions"] = [
                 candidate.model_dump(mode="json") for candidate in self.input.candidates
@@ -228,6 +362,16 @@ class StudyCall(Record):
     def validate_reply(self, text: str) -> None:
         if isinstance(self.input, OracleForwardInput):
             ModelAdapter.validate_submission(self.base_call(), text)
+        elif isinstance(self.input, ForwardQuery):
+            submission = ForwardPrediction.model_validate_json(text).submission()
+            ModelAdapter.validate_submission(
+                ModelCall(view="structured", input=self.input.forward),
+                submission.model_dump_json(),
+            )
+        elif isinstance(self.input, BankRankingInput):
+            ranking = BankRankingSubmission.model_validate_json(text).ranking
+            if sorted(ranking) != sorted(c.candidate_id for c in self.input.candidates):
+                raise ValueError("The ranking must list every bank candidate exactly once")
         elif isinstance(self.input, BankSelectionInput):
             choice = BankSelectionSubmission.model_validate_json(text)
             if choice.candidate_id not in {c.candidate_id for c in self.input.candidates}:
@@ -243,6 +387,11 @@ class StudyAdapter(ModelAdapter):
     a billed invalid reply with its usage instead of aborting the run.
     """
 
+    # Seconds between real requests; a low-throughput deployment is paced so its rate limit
+    # never rejects a request (a rejection would count as a failed attempt).
+    min_request_interval_s = 0.0
+    _next_request_at = 0.0
+
     def study_request_key(self, call: StudyCall) -> str:
         return fingerprint(
             {
@@ -256,6 +405,9 @@ class StudyAdapter(ModelAdapter):
     def _exchange(
         self, prompt: str, images: tuple[RenderedAsset, ...], request_id: str, seed: int
     ) -> ModelReply:
+        if (wait := self._next_request_at - monotonic()) > 0:
+            sleep(wait)
+        self._next_request_at = monotonic() + self.min_request_interval_s
         content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
         content.extend(
             {
@@ -350,6 +502,9 @@ class StudyAdapter(ModelAdapter):
 
 def request_study_model(adapter: StudyAdapter, call: StudyCall, ledger: TrialLedger) -> ModelReply:
     key = adapter.study_request_key(call)
+    # A shared request (the first feedback attempt) rejected earlier stays rejected, unbilled.
+    if (rejected := ledger.rejected_reply(key)) is not None:
+        raise InvalidModelReply(rejected, "Shared request was rejected earlier")
     reservation = 0 if adapter.config.kind == "mock" else adapter.config.request_token_reservation
     cached = ledger.reserve_request(key, reservation)
     if cached is not None:

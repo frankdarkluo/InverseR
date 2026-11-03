@@ -4,9 +4,10 @@ import logging
 from collections import Counter, defaultdict
 from collections.abc import Callable
 from contextlib import ExitStack
+from dataclasses import dataclass
 from functools import partial
 from importlib.metadata import version
-from math import cos, hypot, radians, sin
+from math import cos, dist, hypot, radians, sin
 from pathlib import Path
 from time import monotonic
 from typing import Literal, Self
@@ -33,11 +34,13 @@ from inverser.metrics import endpoint_loss, score_endpoint
 from inverser.model_adapters import ModelCall, ModelReply, RenderedAsset, rendered_asset
 from inverser.physics import Replay, SimulationFailure, SnookerSimulator
 from inverser.runtime import file_sha256, fingerprint, write_json
-from inverser.schemas import CueAction, Layout, Record, ShotRecord
+from inverser.schemas import CueAction, Layout, PhysicsConfig, Record, ShotRecord
 from inverser.study import (
+    ActionBank,
     ForwardInput,
     ForwardSubmission,
     GoalInput,
+    PredictedFrame,
     PublicPhysics,
     make_study_case,
     replay_forward_truth,
@@ -186,6 +189,101 @@ def _scratch(layout: Layout) -> bool:
     return any(ball.kind == "cue" and ball.status == "pocketed" for ball in layout.balls)
 
 
+@dataclass(frozen=True)
+class DrawnBank:
+    bank: ActionBank
+    draw: int
+    witness: str
+    goal: GoalInput
+    outcomes: tuple[CandidateOutcome, ...]
+    truths: dict[str, object]
+
+
+def draw_bank(
+    case_id: str,
+    initial: Layout,
+    simulator: SnookerSimulator,
+    public: PublicPhysics,
+    physics: PhysicsConfig,
+    *,
+    seed: int,
+    candidates: int,
+    max_draws: int,
+    sample_times_s: tuple[float, ...],
+) -> DrawnBank:
+    """Goal-independent Sobol bank; the goal comes from one valid, non-scratch bank member."""
+    for draw in range(max_draws):
+        bank = make_action_bank(
+            case_id, count=candidates, seed=int(fingerprint((seed, case_id, draw))[:8], 16)
+        )
+        replays: dict[str, Replay | None] = {}
+        for candidate in bank.candidates:
+            try:
+                replays[candidate.candidate_id] = simulator.replay(initial, candidate.action)
+            except SimulationFailure:
+                replays[candidate.candidate_id] = None
+        eligible = [
+            candidate.candidate_id
+            for candidate in bank.candidates
+            if (replay := replays[candidate.candidate_id]) is not None and not _scratch(replay.goal)
+        ]
+        if eligible:
+            break
+    else:
+        raise ValueError("No valid non-scratch goal witness within the bounded bank draws")
+    rng = np.random.default_rng(int(fingerprint((seed, case_id, draw, "goal"))[:8], 16))
+    witness = eligible[int(rng.integers(len(eligible)))]
+    witness_replay = replays[witness]
+    if witness_replay is None:
+        raise RuntimeError("Eligible witness lost its replay")
+    goal = GoalInput(
+        case_id=case_id, initial=initial, goal=witness_replay.goal.endpoint_view(), physics=public
+    )
+    radius = goal.physics.table.ball_radius_m
+    diagonal = hypot(goal.physics.table.width_m, goal.physics.table.length_m)
+    outcomes = []
+    truths: dict[str, object] = {}
+    for candidate in bank.candidates:
+        replay = replays[candidate.candidate_id]
+        if replay is None:
+            outcomes.append(
+                CandidateOutcome(
+                    candidate_id=candidate.candidate_id,
+                    goal_success=False,
+                    failure="simulation_failure",
+                )
+            )
+            truths[candidate.candidate_id] = None
+            continue
+        outcomes.append(
+            CandidateOutcome(
+                candidate_id=candidate.candidate_id,
+                loss_radii=endpoint_loss(
+                    replay.goal,
+                    goal.goal,
+                    ball_radius_m=radius,
+                    table_diagonal_m=diagonal,
+                    no_scratch=goal.no_scratch,
+                ),
+                goal_success=score_endpoint(
+                    replay.goal,
+                    goal.goal,
+                    goal.tolerance_radii * radius,
+                    no_scratch=goal.no_scratch,
+                ).success,
+            )
+        )
+        truths[candidate.candidate_id] = {
+            "truth": replay_forward_truth(initial, replay, physics, sample_times_s).model_dump(
+                mode="json"
+            ),
+            "moving_ball_ids": translating_ball_ids(initial, replay.motion),
+        }
+    if not next(o for o in outcomes if o.candidate_id == witness).goal_success:
+        raise ValueError("Bank witness does not reproduce its own goal")
+    return DrawnBank(bank, draw, witness, goal, tuple(outcomes), truths)
+
+
 def prepare_bank_panel(
     source_panel: Path, output: Path, config: BankPanelConfig
 ) -> dict[str, object]:
@@ -240,82 +338,20 @@ def prepare_bank_panel(
         if study_case.case_id != case_id:
             raise ValueError("Bank layouts must keep the source panel case identity")
         initial = record.initial.endpoint_view()
-        for draw in range(config.max_bank_draws):
-            bank = make_action_bank(
-                case_id,
-                count=config.candidates,
-                seed=int(fingerprint((config.seed, case_id, draw))[:8], 16),
-            )
-            replays: dict[str, Replay | None] = {}
-            for candidate in bank.candidates:
-                try:
-                    replays[candidate.candidate_id] = simulator.replay(initial, candidate.action)
-                except SimulationFailure:
-                    replays[candidate.candidate_id] = None
-            eligible = [
-                candidate.candidate_id
-                for candidate in bank.candidates
-                if (replay := replays[candidate.candidate_id]) is not None
-                and not _scratch(replay.goal)
-            ]
-            if eligible:
-                break
-        else:
-            raise ValueError("No valid non-scratch goal witness within the bounded bank draws")
-        draws[draw] += 1
-        rng = np.random.default_rng(int(fingerprint((config.seed, case_id, draw, "goal"))[:8], 16))
-        witness = eligible[int(rng.integers(len(eligible)))]
-        witness_replay = replays[witness]
-        if witness_replay is None:
-            raise RuntimeError("Eligible witness lost its replay")
-        goal = GoalInput(
-            case_id=case_id,
-            initial=initial,
-            goal=witness_replay.goal.endpoint_view(),
-            physics=study_case.public_physics,
+        drawn = draw_bank(
+            case_id,
+            initial,
+            simulator,
+            study_case.public_physics,
+            record.physics,
+            seed=config.seed,
+            candidates=config.candidates,
+            max_draws=config.max_bank_draws,
+            sample_times_s=config.sample_times_s,
         )
-        radius = goal.physics.table.ball_radius_m
-        diagonal = hypot(goal.physics.table.width_m, goal.physics.table.length_m)
-        outcomes = []
-        truths: dict[str, object] = {}
-        for candidate in bank.candidates:
-            replay = replays[candidate.candidate_id]
-            if replay is None:
-                outcomes.append(
-                    CandidateOutcome(
-                        candidate_id=candidate.candidate_id,
-                        goal_success=False,
-                        failure="simulation_failure",
-                    )
-                )
-                truths[candidate.candidate_id] = None
-                continue
-            outcomes.append(
-                CandidateOutcome(
-                    candidate_id=candidate.candidate_id,
-                    loss_radii=endpoint_loss(
-                        replay.goal,
-                        goal.goal,
-                        ball_radius_m=radius,
-                        table_diagonal_m=diagonal,
-                        no_scratch=goal.no_scratch,
-                    ),
-                    goal_success=score_endpoint(
-                        replay.goal,
-                        goal.goal,
-                        goal.tolerance_radii * radius,
-                        no_scratch=goal.no_scratch,
-                    ).success,
-                )
-            )
-            truths[candidate.candidate_id] = {
-                "truth": replay_forward_truth(
-                    initial, replay, record.physics, config.sample_times_s
-                ).model_dump(mode="json"),
-                "moving_ball_ids": translating_ball_ids(initial, replay.motion),
-            }
-        if not next(o for o in outcomes if o.candidate_id == witness).goal_success:
-            raise ValueError("Bank witness does not reproduce its own goal")
+        bank, draw, witness, goal = drawn.bank, drawn.draw, drawn.witness, drawn.goal
+        outcomes, truths = drawn.outcomes, drawn.truths
+        draws[draw] += 1
         case_dir = output / "public" / case_id
         case_dir.mkdir()
         bev = index < config.bev_layouts
@@ -452,6 +488,38 @@ def free_roll_resting_state(initial: Layout, action: CueAction, physics: PublicP
             )
         balls.append(ball)
     return Layout(balls=tuple(balls))
+
+
+def trivial_forward_baselines(
+    forward: ForwardInput, truth: ForwardSubmission, moving_ball_ids: tuple[str, ...]
+) -> dict[str, float | None]:
+    """Resting max error (radii) of two trivial forecasters: nothing moves, straight free roll."""
+    radius = forward.physics.table.ball_radius_m
+    static = score_forward(
+        ForwardSubmission(
+            frames=tuple(
+                PredictedFrame(time_s=time, state=forward.initial)
+                for time in forward.sample_times_s
+            ),
+            resting_state=forward.initial,
+            events=(),
+        ),
+        truth,
+        initial=forward.initial,
+        moving_ball_ids=moving_ball_ids,
+        position_tolerance_m=radius,
+        event_time_tolerance_s=0.02,
+    ).resting_max_position_error_m
+    rest = {ball.ball_id: ball for ball in truth.resting_state.balls}
+    free = [
+        dist(ball.xy_m, reference)
+        for ball in free_roll_resting_state(forward.initial, forward.action, forward.physics).balls
+        if ball.xy_m is not None and (reference := rest[ball.ball_id].xy_m) is not None
+    ]
+    return {
+        "static": static / radius if static is not None else None,
+        "free_roll": max(free) / radius if free else None,
+    }
 
 
 class BankStudyConfig(Record):

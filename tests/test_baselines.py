@@ -36,8 +36,13 @@ def test_proposals_are_reproducible_legal_and_do_not_need_a_goal(method):
         assert unit_action(action_unit(action, config), config).model_dump() == pytest.approx(
             action.model_dump()
         )
-    with pytest.raises(ValueError, match="cube"):
-        unit_action(np.asarray([1, 0, -1, 0], dtype=np.float64), config)
+    for outside in ([1, 0, -1, 0], [0.5, 0.5, 0.25, -1e-6]):
+        with pytest.raises(ValueError, match="cube"):
+            unit_action(np.asarray(outside, dtype=np.float64), config)
+    # Rounding just outside a face, as bounded Powell produced in the start-order ablation.
+    for outside in ([0.5, 0.5, 0.25, -1e-17], [0.5, 1 + 1e-12, 0.25, 0.5]):
+        inside = np.clip(outside, 0, 1)
+        assert unit_action(np.asarray(outside), config) == unit_action(inside, config)
 
 
 def test_bank_contains_only_goal_independent_public_actions():

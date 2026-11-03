@@ -23,6 +23,8 @@ from inverser.study import ActionBank, CandidateAction, GoalInput, public_physic
 
 LOGGER = logging.getLogger(__name__)
 BaselineMethod = Literal["random", "sobol", "geometry_powell"]
+# Bounded Powell can step a few ulps outside the cube; only such points are snapped back.
+CUBE_TOLERANCE = 1e-9
 
 
 class SearchConfig(Record):
@@ -70,8 +72,14 @@ class _SearchStop(Exception):
 
 
 def unit_action(unit: NDArray[np.float64], config: SearchConfig) -> CueAction:
-    if unit.shape != (4,) or not np.isfinite(unit).all() or np.any((unit < 0) | (unit > 1)):
+    if (
+        unit.shape != (4,)
+        or not np.isfinite(unit).all()
+        or np.any((unit < -CUBE_TOLERANCE) | (unit > 1 + CUBE_TOLERANCE))
+    ):
         raise ValueError("Search coordinates must be a finite point in the four-dimensional cube")
+    if np.any((unit < 0) | (unit > 1)):
+        unit = np.clip(unit, 0.0, 1.0)
     radius = 0.5 * sqrt(float(unit[2]))
     angle = 2 * pi * float(unit[3])
     return CueAction(

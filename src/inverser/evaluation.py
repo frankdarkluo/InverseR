@@ -183,6 +183,14 @@ class TrialLedger:
             raise ValueError("Only a billed completed reply can be rejected")
         LOGGER.error("Model request %s returned an invalid submission", key)
 
+    def rejected_reply(self, key: str) -> ModelReply | None:
+        row = self.connection.execute(
+            "SELECT reply_json FROM requests WHERE request_key=? AND status='known_error' "
+            "AND error_code='invalid_submission'",
+            (key,),
+        ).fetchone()
+        return ModelReply.model_validate_json(row[0]) if row is not None and row[0] else None
+
     def _reserve_physics_locked(self) -> int:
         occupied = (
             self.connection.execute(

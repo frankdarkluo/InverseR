@@ -4,7 +4,6 @@ from collections import Counter, defaultdict
 from collections.abc import Callable
 from contextlib import ExitStack
 from functools import partial
-from math import dist
 from pathlib import Path
 from time import monotonic
 from typing import Literal, Self
@@ -14,7 +13,7 @@ import numpy as np
 from pydantic import Field, model_validator
 
 from inverser.azure_study import MODELS, _score_row, select_pilot_requests
-from inverser.bank_study import free_roll_resting_state
+from inverser.bank_study import trivial_forward_baselines
 from inverser.diagnostic_panel import (
     PanelRequest,
     load_synthetic_panel_call,
@@ -24,7 +23,6 @@ from inverser.diagnostics import (
     ForwardScore,
     InterventionScore,
     PairedMeasurement,
-    score_forward,
     score_intervention_pair,
     summarize_paired,
 )
@@ -34,7 +32,7 @@ from inverser.model_adapters import ModelReply
 from inverser.physics import SimulationFailure, SnookerSimulator
 from inverser.runtime import file_sha256, fingerprint, write_json
 from inverser.schemas import CueAction, Record, ShotRecord
-from inverser.study import ForwardInput, ForwardSubmission, PredictedFrame
+from inverser.study import ForwardInput, ForwardSubmission
 from inverser.study_calls import (
     TOLERANCE_RADII,
     OracleForwardInput,
@@ -225,39 +223,16 @@ def _counts(profiles: list[dict[str, bool]]) -> dict[str, int]:
 
 
 def forward_baselines(panel: Path, request: PanelRequest) -> dict[str, float | None]:
-    """Resting max error (radii) of two trivial forecasters: nothing moves, straight free roll."""
     forward = load_synthetic_panel_call(panel, request).input
     if not isinstance(forward, ForwardInput):
         raise ValueError("Forward baselines need a blind-forward request")
     labels = json.loads((panel / "private" / f"{request.case_id}.json").read_text())
     item = labels["forward_labels"][request.condition]
-    truth = ForwardSubmission.model_validate(item["truth"])
-    radius = forward.physics.table.ball_radius_m
-    static = score_forward(
-        ForwardSubmission(
-            frames=tuple(
-                PredictedFrame(time_s=time, state=forward.initial)
-                for time in forward.sample_times_s
-            ),
-            resting_state=forward.initial,
-            events=(),
-        ),
-        truth,
-        initial=forward.initial,
-        moving_ball_ids=tuple(item["moving_ball_ids"]),
-        position_tolerance_m=radius,
-        event_time_tolerance_s=0.02,
-    ).resting_max_position_error_m
-    rest = {ball.ball_id: ball for ball in truth.resting_state.balls}
-    free = [
-        dist(ball.xy_m, reference)
-        for ball in free_roll_resting_state(forward.initial, forward.action, forward.physics).balls
-        if ball.xy_m is not None and (reference := rest[ball.ball_id].xy_m) is not None
-    ]
-    return {
-        "static": static / radius if static is not None else None,
-        "free_roll": max(free) / radius if free else None,
-    }
+    return trivial_forward_baselines(
+        forward,
+        ForwardSubmission.model_validate(item["truth"]),
+        tuple(item["moving_ball_ids"]),
+    )
 
 
 def _resting_error(row: ProbeRow, radius: float) -> float | None:

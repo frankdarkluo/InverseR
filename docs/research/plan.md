@@ -813,6 +813,54 @@ documented in [study preparation](../benchmark/study_preparation.md).
 
 ### 13.1 已确认范围与未确认资源
 
+#### Step 2 model sweep completed
+
+五个模型在冻结测试集上全部跑完并核对：GPT-5.5、GPT-5.4、o4-mini（low），Kimi-K2.6、DeepSeek-V4-Pro
+（none，DeepSeek 只用结构化输入）。合计标价约 $428，另有冒烟和作废目录约 $5。所有正式套件汇总用
+`formal-summary` 由同一份计分代码从 job 文件重算（`formal-sweep-summary-v1.json`），四个有运行时汇总的
+模型逐位一致。结果：直接出杆 ≤1/200（几何直接 77/200）；预测排序只有 OpenAI 模型高于随机，且都不优于
+直线近似；真实反馈 GPT-5.5 36/64、GPT-5.4 29/64，其余 ≤1/64；GPT-5.5 比同预算几何＋Powell 多 15.6 个
+百分点 [6.3, 26.6]，GPT-5.4 与之相当。期间修复两个缺陷（计分溢出、共用第 1 次尝试不合规）并加请求间隔
+选项，227 测试、Ruff、Mypy 通过；代码仍未提交。见[五个模型的结果](formal_model_sweep.md)。主结果用
+主表还是图、最终叙事待研究者决定。
+
+#### Paper framing decided
+
+研究者选定论文主线：知道会发生什么，不等于知道该怎么做。全文用同一批布局上的能力链组织（后果
+预测、干预敏感性、候选决策、逆向推理、闭环试错），逆向推理是主打任务；复现球员原杆作为真实数据
+诊断。发现的两种写法已在看到正式 P1–P4 之前写定。见[论文主线与引言设计](paper_framing.md)。
+
+#### Step 2 started: GPT-5.5 on the formal test
+
+研究者批准先只跑 GPT-5.5（low）：formal-suite 3,328 请求、19M token；feedback-study 1,408 请求、
+7.2M token；单请求输出 32,768，超时 900 秒。反馈部分已完成：genuine 36/64、shuffled 0/64、
+reflection 3/64，同样 8 次仿真时比几何＋Powell 多 15.6 个百分点 [6.3, 26.6]。正式套件运行中，
+第 953 个 job 遇到一次 HTTP 500，记为失败、不重发，原参数续跑。见
+[GPT-5.5 结果](formal_gpt55_results.md)。
+
+研究者随后为 CVPR（约四周后截稿）扩展模型：批准 o4-mini 和 GPT-5.4（每个模型套件 3,328 请求 /
+19M token、反馈 1,408 / 7.2M），以及 Azure 上的 Kimi-K2.6 和 DeepSeek-V4-Pro；API 进程最多同时 8 个。
+Kimi 和 DeepSeek 只需按部署记录返回的模型名（`study_calls.REPORTED_MODEL_ID`）。两者在 low 下思考过长，
+DeepSeek-V4-Pro 和 Kimi-K2.6 都改用 `none`（不思考；DeepSeek 只跑结构化 2,800 请求），额度沿用已批准
+的上限；Kimi-K3 需要额外付费，未采用。改代码前把源码快照到 `.cache/producer-snapshots/2026-10-22/`，6 个进行中的
+运行从快照只出计划核对，运行哈希全部一致，需要续跑时从快照运行。GPT-5.5 在会话结束时中断一次，
+按 B0 先例备份账本、释放那一条预留并写入干预记录后续跑。设置细节见
+[正式测试协议第 6 节](formal_test_protocol.md)。
+
+#### Step 1: formal test set, classical baselines and experiment A (CPU only)
+
+研究者批准第 1 步只用 CPU，第 2 步模型扫描和第 3 步开源模型/真实数据各自另批；开始前做了本地存档
+提交 `d001933`。新增 `prepare-formal-test`、`formal-suite`（默认只出计划）、`formal-classical` 和
+`start-order-ablation`。协议修改：forward 合同 v2 去掉 `unobserved`；干预改为按 family 的强干预阶梯；
+bank 改为 8 个候选完整排序（MRR）。正式测试集（种子 20261021）冻结 200 个布局：与开发数据重叠 0、
+弱干预 0、每个布局恰好 1 个可达候选；每个模型 3,328 个非反馈请求加至多 1,408 个反馈请求；5 项主要
+分析已预注册。测试集经典基线：几何直接 77/200（38.5%），几何＋Powell 在 8/32/128 次为 77/79/81，
+随机和 Sobol 到 128 次各 1。实验 A（32 个开发布局）：模型起点放最后时两个模型都是 10/12/12，与预注册
+预测一致，v1 的下降是调度效应；模型动作作为单起点比第一个几何候选少 22–34 个百分点。A 第一次运行因
+有界 Powell 的浮点舍入中断，`baselines.unit_action` 改为只把 1e−9 内的越界点夹回后，在 v2 目录重跑，
+v1 已完成的 367 个 job 逐条一致。新增模型请求 0；产物约 1.0 GB；224 测试、Ruff、Mypy（44 个源文件）
+通过。第 1 步代码尚未存档提交。见[正式测试协议](formal_test_protocol.md)和[实验 A](start_order_ablation.md)。
+
 #### B1/B2/C completed at low effort
 
 研究者选择偏离 B0 预注册规则：B1/B2/C 用 low，B1 另保留 minimal 臂；执行前存档 `6196aac`，并让

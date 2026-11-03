@@ -106,7 +106,7 @@ class BackendConfig(Record):
     provider: Literal["openai", "azure_openai"] = "openai"
     deployment_name: str | None = Field(default=None, pattern=r"^[A-Za-z0-9._-]+$")
     api_version: str | None = None
-    reasoning_effort: Literal["minimal", "low", "medium", "high"] | None = None
+    reasoning_effort: Literal["none", "minimal", "low", "medium", "high"] | None = None
     timeout_s: float = Field(default=30, gt=0, le=300)
 
     @model_validator(mode="after")

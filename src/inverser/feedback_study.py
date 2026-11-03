@@ -20,9 +20,9 @@ from inverser.evaluation import BudgetLimits, TrialLedger, recorded_replay
 from inverser.metrics import score_endpoint
 from inverser.model_adapters import ModelReply
 from inverser.physics import SimulationFailure, SnookerSimulator
-from inverser.planning_pilot import PlanningCase, PlanningPilotConfig, select_planning_cases
+from inverser.planning_pilot import PlanningPilotConfig, select_planning_cases
 from inverser.runtime import file_sha256, fingerprint, write_json
-from inverser.schemas import CueAction, Record
+from inverser.schemas import CueAction, PhysicsConfig, Record
 from inverser.study import (
     GoalInput,
     GoalSubmission,
@@ -39,6 +39,7 @@ from inverser.study_calls import (
     SimulatedOutcome,
     StudyAdapter,
     StudyCall,
+    azure_model_backends,
     credential_ready,
     endpoint_tolerance_profile,
     guarded_request,
@@ -47,7 +48,6 @@ from inverser.study_calls import (
     producer_hashes,
     request_study_model,
     save_job,
-    study_azure_backends,
     usage_summary,
 )
 
@@ -62,7 +62,8 @@ CONDITION_MEANING = {
 
 class FeedbackStudyConfig(Record):
     schema_version: Literal["feedback-study-v1"] = "feedback-study-v1"
-    layouts: int = Field(default=32, ge=4, le=32)
+    models: tuple[str, ...] = Field(default=MODELS, min_length=1, max_length=8)
+    layouts: int = Field(default=32, ge=4, le=200)
     case_seed: int = Field(default=20261017, ge=0)
     max_attempts: int = Field(default=8, ge=2, le=16)
     conditions: tuple[Condition, ...] = ("genuine", "shuffled", "reflection")
@@ -73,6 +74,7 @@ class FeedbackStudyConfig(Record):
     max_output_tokens: int = Field(default=4096, ge=256, le=32768)
     request_token_reservation: int = Field(default=16384, ge=8192)
     timeout_s: float = Field(default=900, gt=0, le=900)
+    min_request_interval_s: float = Field(default=0, ge=0, le=60)
 
     @model_validator(mode="after")
     def validate_design(self) -> Self:
@@ -80,6 +82,8 @@ class FeedbackStudyConfig(Record):
             raise ValueError("Feedback layouts must be balanced across four source families")
         if not self.conditions or len(set(self.conditions)) != len(self.conditions):
             raise ValueError("Feedback conditions must be distinct and nonempty")
+        if len(set(self.models)) != len(self.models):
+            raise ValueError("Feedback models must be distinct")
         if self.request_token_reservation < self.max_output_tokens:
             raise ValueError("Each token reservation must cover its completion cap")
         if self.max_model_requests < self.max_requests():
@@ -89,7 +93,42 @@ class FeedbackStudyConfig(Record):
     def max_requests(self) -> int:
         # The first attempt is one shared request per layout and model.
         later = (self.max_attempts - 1) * len(self.conditions)
-        return self.layouts * (1 + later) * len(MODELS)
+        return self.layouts * (1 + later) * len(self.models)
+
+
+class FeedbackCase(Record):
+    case_id: str
+    source_group: str
+    family: str
+    goal: GoalInput
+    physics: PhysicsConfig
+
+
+def development_feedback_cases(
+    panel: Path, native_run: Path, config: FeedbackStudyConfig
+) -> tuple[tuple[FeedbackCase, ...], dict[str, object]]:
+    """The planning pilot's fixed development cases, so classical results match case for case."""
+    validation = validate_diagnostic_panel(panel)
+    cases = []
+    for case in select_planning_cases(
+        panel, native_run, PlanningPilotConfig(layouts=config.layouts, seed=config.case_seed)
+    ):
+        goal = load_synthetic_panel_call(panel, case.request).input
+        if not isinstance(goal, GoalInput):
+            raise ValueError("Feedback episodes require a public goal contract")
+        cases.append(
+            FeedbackCase(
+                case_id=case.request.case_id,
+                source_group=case.source_group,
+                family=case.family,
+                goal=goal,
+                physics=case.physics,
+            )
+        )
+    return tuple(cases), {
+        "panel_manifest_sha256": validation["manifest_sha256"],
+        "native_manifest_sha256": file_sha256(native_run / "manifest.json"),
+    }
 
 
 class JudgedAttempt(Record):
@@ -200,7 +239,7 @@ def judge_attempt(
 
 
 def run_episode(
-    case: PlanningCase,
+    case: FeedbackCase,
     goal: GoalInput,
     model: str,
     condition: Condition,
@@ -351,7 +390,7 @@ def summarize_feedback(rows: list[EpisodeRow], config: FeedbackStudyConfig) -> d
             }
         )
     comparisons = []
-    for model in MODELS:
+    for model in config.models:
         for left, right in (
             ("genuine", "shuffled"),
             ("genuine", "reflection"),
@@ -385,8 +424,8 @@ def summarize_feedback(rows: list[EpisodeRow], config: FeedbackStudyConfig) -> d
 
 
 def run_feedback_study(
-    panel: Path,
-    native_run: Path,
+    cases: tuple[FeedbackCase, ...],
+    case_source: dict[str, object],
     source: Path,
     output: Path,
     config: FeedbackStudyConfig,
@@ -397,33 +436,32 @@ def run_feedback_study(
     transport: httpx.BaseTransport | None = None,
     limit_episodes: int | None = None,
 ) -> dict[str, object]:
-    validation = validate_diagnostic_panel(panel)
-    cases = select_planning_cases(
-        panel, native_run, PlanningPilotConfig(layouts=config.layouts, seed=config.case_seed)
-    )
-    backends = study_azure_backends(
+    if len(cases) != config.layouts or len({case.case_id for case in cases}) != len(cases):
+        raise ValueError("Feedback cases must be the declared number of distinct layouts")
+    backends = azure_model_backends(
         source,
         endpoint_index,
+        config.models,
         reasoning_effort=config.reasoning_effort,
         max_output_tokens=config.max_output_tokens,
         request_token_reservation=config.request_token_reservation,
         timeout_s=config.timeout_s,
     )
-    agent_rollouts = config.layouts * config.max_attempts * (len(MODELS) + 1)
-    judge_rollouts = config.layouts * config.max_attempts * len(config.conditions) * len(MODELS)
+    models = config.models
+    agent_rollouts = config.layouts * config.max_attempts * (len(models) + 1)
+    judge_rollouts = config.layouts * config.max_attempts * len(config.conditions) * len(models)
     limits = BudgetLimits(
         max_model_requests=config.max_model_requests,
         max_total_tokens=config.max_total_tokens,
         max_physics_evaluations=agent_rollouts + judge_rollouts,
     )
     protocol: dict[str, object] = {
-        "panel_manifest_sha256": validation["manifest_sha256"],
-        "native_manifest_sha256": file_sha256(native_run / "manifest.json"),
+        **case_source,
         "azure_inventory_sha256": file_sha256(source),
         "endpoint_hash": fingerprint(backends[0].base_url),
         "config": config.model_dump(mode="json"),
         "backends": [backend.model_dump(mode="json") for backend in backends],
-        "case_ids": [case.request.case_id for case in cases],
+        "case_ids": [case.case_id for case in cases],
         "feedback_conditions": {name: CONDITION_MEANING[name] for name in config.conditions},
         "limits": limits.model_dump(mode="json"),
         "producer": producer_hashes(
@@ -441,7 +479,7 @@ def run_feedback_study(
         "formal_evaluation": False,
     }
     run_hash = lock_run(output, protocol, reserve_bytes=200_000_000)
-    planned = len(cases) * len(MODELS) * len(config.conditions)
+    planned = len(cases) * len(models) * len(config.conditions)
     if not execute:
         return {
             "status": "planned_no_calls",
@@ -470,13 +508,12 @@ def run_feedback_study(
                 )
                 for backend in backends
             }
+            for adapter in adapters.values():
+                adapter.min_request_interval_s = config.min_request_interval_s
             for case in cases:
-                call = load_synthetic_panel_call(panel, case.request)
-                if not isinstance(call.input, GoalInput):
-                    raise ValueError("Feedback episodes require a public goal contract")
-                goal = call.input
+                goal = case.goal
                 key = fingerprint(case.physics.model_dump(mode="json"))
-                for model in MODELS:
+                for model in models:
                     for condition in config.conditions:
                         path = output / "episodes" / model / condition / f"{goal.case_id}.json"
                         cached = load_job(path, run_hash)

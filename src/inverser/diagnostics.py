@@ -189,6 +189,11 @@ class InterventionScore(Record):
     joint_events_success: bool
 
 
+# A response error is capped here so a far off-table prediction (one model returned the largest
+# float as a coordinate) stays finite and simply scores as a miss.
+RESPONSE_ERROR_CEILING_M = 1e6
+
+
 def score_intervention_pair(
     factual_prediction: ForwardSubmission,
     intervened_prediction: ForwardSubmission,
@@ -243,7 +248,9 @@ def score_intervention_pair(
             ):
                 predicted_delta = np.subtract(b.xy_m, a.xy_m)
                 truth_delta = np.subtract(d.xy_m, c.xy_m)
-                error = float(np.linalg.norm(predicted_delta - truth_delta))
+                error = min(
+                    float(np.linalg.norm(predicted_delta - truth_delta)), RESPONSE_ERROR_CEILING_M
+                )
                 errors.append(error)
                 if ball.ball_id in moving:
                     moving_errors.append(error)

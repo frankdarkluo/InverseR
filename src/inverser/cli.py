@@ -286,15 +286,67 @@ def main() -> int:
         "feedback-study",
         help="C genuine/shuffled/no-evidence feedback episodes; plans only by default",
     )
-    feedback_study.add_argument("--panel", type=Path, required=True)
-    feedback_study.add_argument("--native-run", type=Path, required=True)
-    feedback_study.add_argument("--reasoning-effort", choices=EFFORTS, required=True)
+    cases = feedback_study.add_mutually_exclusive_group(required=True)
+    cases.add_argument("--panel", type=Path, help="development panel; needs --native-run")
+    cases.add_argument("--formal-panel", type=Path, help="frozen formal test panel")
+    feedback_study.add_argument("--native-run", type=Path)
+    feedback_study.add_argument("--models", nargs="+", default=["gpt-5-mini", "gpt-5"])
+    feedback_study.add_argument("--reasoning-effort", choices=["none", *EFFORTS], required=True)
     feedback_study.add_argument("--layouts", type=int, default=32)
     feedback_study.add_argument("--max-attempts", type=int, default=8)
     feedback_study.add_argument("--limit-episodes", type=int)
+    feedback_study.add_argument("--min-request-interval-s", type=float, default=0.0)
     _study_api_arguments(
         feedback_study, requests=1408, tokens=20_000_000, output=4096, reservation=16384
     )
+    formal_test = commands.add_parser(
+        "prepare-formal-test",
+        help="Freeze a fresh held-out formal test panel from new seeds (CPU only, no model calls)",
+    )
+    formal_test.add_argument("--dev-source", type=Path, required=True)
+    formal_test.add_argument("--output", type=Path, required=True)
+    formal_test.add_argument("--seed", type=int, default=20261021)
+    formal_test.add_argument("--per-family", type=int, default=50)
+    formal_test.add_argument("--bev-per-family", type=int, default=12)
+    formal_test.add_argument("--feedback-per-family", type=int, default=16)
+    formal_test.add_argument("--candidates", type=int, default=8)
+    formal_suite = commands.add_parser(
+        "formal-suite",
+        help="Forward, direct-goal and bank requests on the frozen formal test; plans by default",
+    )
+    formal_suite.add_argument("--formal-panel", type=Path, required=True)
+    formal_suite.add_argument("--models", nargs="+", required=True)
+    formal_suite.add_argument("--reasoning-effort", choices=["none", *EFFORTS], required=True)
+    formal_suite.add_argument(
+        "--suites",
+        nargs="+",
+        choices=["forward", "goal", "bank"],
+        default=["forward", "goal", "bank"],
+    )
+    formal_suite.add_argument("--no-bev", action="store_true")
+    formal_suite.add_argument("--limit-jobs", type=int)
+    _study_api_arguments(formal_suite, requests=1, tokens=1, output=32768, reservation=40960)
+    formal_summary = commands.add_parser(
+        "formal-summary", help="Re-score finished formal suite runs with the current scoring code"
+    )
+    formal_summary.add_argument("--formal-panel", type=Path, required=True)
+    formal_summary.add_argument("--runs", type=Path, nargs="+", required=True)
+    formal_summary.add_argument("--output", type=Path, required=True)
+    formal_classical = commands.add_parser(
+        "formal-classical", help="Classical geometry/search baselines on the frozen formal test"
+    )
+    formal_classical.add_argument("--formal-panel", type=Path, required=True)
+    formal_classical.add_argument("--output", type=Path, required=True)
+    formal_classical.add_argument("--workers", type=int, default=4)
+    start_order = commands.add_parser(
+        "start-order-ablation",
+        help="Experiment A: start order versus start quality on the planning pilot cases (CPU)",
+    )
+    start_order.add_argument("--panel", type=Path, required=True)
+    start_order.add_argument("--native-run", type=Path, required=True)
+    start_order.add_argument("--reference", type=Path, required=True)
+    start_order.add_argument("--output", type=Path, required=True)
+    start_order.add_argument("--workers", type=int, default=4)
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if args.command in ("generate-pilot", "audit-pilot"):
@@ -604,9 +656,14 @@ def main() -> int:
 
         result = _study_result(_with_azure_token(bank) if args.execute else bank(None), args)
     elif args.command == "feedback-study":
-        from inverser.feedback_study import FeedbackStudyConfig, run_feedback_study
+        from inverser.feedback_study import (
+            FeedbackStudyConfig,
+            development_feedback_cases,
+            run_feedback_study,
+        )
 
         feedback_config = FeedbackStudyConfig(
+            models=tuple(args.models),
             layouts=args.layouts,
             max_attempts=args.max_attempts,
             reasoning_effort=args.reasoning_effort,
@@ -614,12 +671,23 @@ def main() -> int:
             max_total_tokens=args.max_total_tokens,
             max_output_tokens=args.max_output_tokens,
             request_token_reservation=args.request_token_reservation,
+            min_request_interval_s=args.min_request_interval_s,
         )
+        if args.formal_panel is not None:
+            from inverser.formal_suite import formal_feedback_cases
+
+            feedback_cases, case_source = formal_feedback_cases(args.formal_panel)
+        else:
+            if args.native_run is None:
+                parser.error("--panel requires --native-run")
+            feedback_cases, case_source = development_feedback_cases(
+                args.panel, args.native_run, feedback_config
+            )
 
         def feedback(token: Callable[[], str] | None) -> dict[str, object]:
             return run_feedback_study(
-                args.panel,
-                args.native_run,
+                feedback_cases,
+                case_source,
                 args.azure_config,
                 args.output,
                 feedback_config,
@@ -632,6 +700,72 @@ def main() -> int:
         result = _study_result(
             _with_azure_token(feedback) if args.execute else feedback(None), args
         )
+    elif args.command == "prepare-formal-test":
+        from inverser.formal_panel import FormalTestConfig, prepare_formal_test
+
+        result = prepare_formal_test(
+            args.dev_source,
+            args.output,
+            FormalTestConfig(
+                seed=args.seed,
+                per_family=args.per_family,
+                bev_per_family=args.bev_per_family,
+                feedback_per_family=args.feedback_per_family,
+                candidates=args.candidates,
+            ),
+        )
+    elif args.command == "formal-suite":
+        from inverser.formal_suite import FormalSuiteConfig, run_formal_suite
+
+        suite_config = FormalSuiteConfig(
+            models=tuple(args.models),
+            reasoning_effort=args.reasoning_effort,
+            suites=tuple(args.suites),
+            include_bev=not args.no_bev,
+            max_model_requests=args.max_requests,
+            max_total_tokens=args.max_total_tokens,
+            max_output_tokens=args.max_output_tokens,
+            request_token_reservation=args.request_token_reservation,
+        )
+
+        def suite(token: Callable[[], str] | None) -> dict[str, object]:
+            return run_formal_suite(
+                args.formal_panel,
+                args.azure_config,
+                args.output,
+                suite_config,
+                endpoint_index=args.endpoint_index,
+                execute=token is not None,
+                token_provider=token,
+                limit_jobs=args.limit_jobs,
+            )
+
+        result = _study_result(_with_azure_token(suite) if args.execute else suite(None), args)
+    elif args.command == "formal-summary":
+        from inverser.formal_suite import rescore_formal_runs
+
+        rescore_formal_runs(args.formal_panel, tuple(args.runs), args.output)
+        result = {"runs": [run.name for run in args.runs], "summary_file": str(args.output)}
+    elif args.command == "formal-classical":
+        from inverser.formal_suite import FormalClassicalConfig, run_formal_classical
+
+        classical = run_formal_classical(
+            args.formal_panel, args.output, FormalClassicalConfig(workers=args.workers)
+        )
+        result = {key: value for key, value in classical.items() if not isinstance(value, list)}
+        result["summary_file"] = str(args.output / "summary.json")
+    elif args.command == "start-order-ablation":
+        from inverser.start_order import StartOrderConfig, run_start_order_ablation
+
+        ablation = run_start_order_ablation(
+            args.panel,
+            args.native_run,
+            args.reference,
+            args.output,
+            StartOrderConfig(workers=args.workers),
+        )
+        result = {key: value for key, value in ablation.items() if not isinstance(value, list)}
+        result["summary_file"] = str(args.output / "summary.json")
     else:
         from inverser.preview import render_preview
 

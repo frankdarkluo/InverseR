@@ -1,6 +1,7 @@
 import pytest
 
 from inverser.diagnostics import (
+    RESPONSE_ERROR_CEILING_M,
     CandidateOutcome,
     PairedMeasurement,
     score_bank_selection,
@@ -239,3 +240,26 @@ def test_ignoring_action_change_fails_joint_intervention_even_with_perfect_factu
     assert result.moving_response_mean_error_m == pytest.approx(0.2)
     assert result.maximum_response_error_m == pytest.approx(0.2)
     assert result.moving_response_comparisons == 1 and result.paired_ball_times == 3
+
+
+def test_a_far_off_table_response_prediction_scores_as_a_finite_miss():
+    initial = positions()
+    factual = ForwardSubmission(
+        frames=(PredictedFrame(time_s=1, state=initial),), resting_state=initial, events=()
+    )
+    wild = positions(cue=(1.7976931348623157e308, 0.5))
+    intervened = ForwardSubmission(
+        frames=(PredictedFrame(time_s=1, state=wild),), resting_state=wild, events=()
+    )
+    result = score_intervention_pair(
+        factual,
+        intervened,
+        factual,
+        factual,
+        initial=initial,
+        moving_ball_ids=("cue",),
+        position_tolerance_m=0.05,
+        event_time_tolerance_s=0.1,
+    )
+    assert result.maximum_response_error_m == RESPONSE_ERROR_CEILING_M
+    assert result.moving_response_mean_error_m == RESPONSE_ERROR_CEILING_M
