@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="794" height="162" viewBox="0 0 794 162" role="img">
+<title>Observed event-state alignment</title>
+<rect width="100%" height="100%" fill="white"/>
+<g font-family="sans-serif" fill="#222733">
+<text x="20.00" y="23.00" font-size="16">Event–state alignment and stasis</text>
+<text x="306.00" y="51.00" font-size="11" text-anchor="middle">Joint exact</text>
+<text x="486.00" y="51.00" font-size="11" text-anchor="middle">All coords | wrong event</text>
+<text x="666.00" y="51.00" font-size="11" text-anchor="middle">Stasis | true collision and valid</text>
+<text x="20.00" y="81.00" font-size="11">base</text>
+<text x="306.00" y="81.00" font-size="12" text-anchor="middle">0.0% · n=240</text>
+<text x="486.00" y="81.00" font-size="12" text-anchor="middle">0.0% · n=215</text>
+<text x="666.00" y="81.00" font-size="12" text-anchor="middle">2.9% · n=103</text>
+<text x="20.00" y="113.00" font-size="11">sft400</text>
+<text x="306.00" y="113.00" font-size="12" text-anchor="middle">0.0% · n=240</text>
+<text x="486.00" y="113.00" font-size="12" text-anchor="middle">0.0% · n=209</text>
+<text x="666.00" y="113.00" font-size="12" text-anchor="middle">19.5% · n=118</text>
+</g>
+</svg>

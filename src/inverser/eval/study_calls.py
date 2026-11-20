@@ -1,0 +1,866 @@
+import json
+import logging
+import os
+from collections import Counter
+from collections.abc import Callable
+from pathlib import Path
+from time import monotonic, sleep
+from typing import Literal, Self
+
+import httpx
+import numpy as np
+from pydantic import Field, model_validator
+
+from inverser.diagnostics import ForwardScore
+from inverser.evaluation import TrialLedger
+from inverser.metrics import EndpointScore
+from inverser.model_adapters import (
+    VLM_SYSTEM_PROMPT,
+    BackendConfig,
+    InvalidModelReply,
+    ModelAdapter,
+    ModelCall,
+    ModelReply,
+    RenderedAsset,
+    TokenUsage,
+    _object,
+    _token,
+    split_reasoning,
+)
+from inverser.runtime import PROJECT_ROOT, check_storage, file_sha256, fingerprint, write_json
+from inverser.schemas import BallKind, Layout, Record
+from inverser.study import (
+    CandidateAction,
+    ForwardInput,
+    ForwardSubmission,
+    GoalInput,
+    GoalSubmission,
+    SemanticContact,
+    SubmittedAction,
+)
+
+LOGGER = logging.getLogger(__name__)
+# "none" turns thinking off on models that support it (Azure-hosted Kimi and DeepSeek).
+ReasoningEffort = Literal["none", "minimal", "low", "medium", "high"]
+# Pre-registered sensitivity tolerances; the 1-radius primary threshold is unchanged.
+TOLERANCE_RADII = (0.25, 0.5, 1.0, 2.0, 5.0)
+KINEMATICS_NOTE = (
+    "Simulator-measured cue-ball linear and angular velocity immediately after the cue impact; "
+    "table frame x right, y up, z vertical."
+)
+SELECTION_NOTE = (
+    "Choose exactly one candidate_id whose single execution from the initial state best reaches "
+    "the goal state."
+)
+FEEDBACK_NOTE = (
+    "Each earlier attempt was executed once from the same initial state in the declared "
+    "simulator and its simulated outcome is listed. An outcome with goal_reached=true ends the "
+    "episode; otherwise the action submitted at attempt max_attempts is final."
+)
+REFLECTION_NOTE = (
+    "Earlier attempts were not executed and no simulated outcome is available. The action "
+    "submitted at attempt max_attempts is final."
+)
+FIRST_ATTEMPT_NOTE = (
+    "This is the first of max_attempts attempts. Submit one cue action; later attempts may "
+    "revise it."
+)
+RANKING_NOTE = (
+    "Rank every candidate_id from best to worst by how closely its single execution from the "
+    "initial state reaches the goal state; list each candidate exactly once."
+)
+
+
+class StudyBackendConfig(BackendConfig):
+    max_output_tokens: int = Field(default=1024, gt=0, le=32768)
+    timeout_s: float = Field(default=30, gt=0, le=900)
+
+
+class JobEnvelope(Record):
+    run_hash: str
+    payload: dict[str, object]
+    payload_sha256: str
+
+    @model_validator(mode="after")
+    def validate_checksum(self) -> Self:
+        if fingerprint(self.payload) != self.payload_sha256:
+            raise ValueError("Completed job payload checksum mismatch")
+        return self
+
+
+# Azure-hosted partner models report their bare name (Kimi) or a fixed placeholder (DeepSeek)
+# instead of "<model>-<version>"; the deployment name still routes each request.
+REPORTED_MODEL_ID = {"Kimi-K2.6": "Kimi-K2.6", "DeepSeek-V4-Pro": "default"}
+
+
+def azure_model_backends(
+    source: Path,
+    endpoint_index: int,
+    models: tuple[str, ...],
+    *,
+    reasoning_effort: ReasoningEffort,
+    max_output_tokens: int,
+    request_token_reservation: int,
+    timeout_s: float,
+) -> tuple[StudyBackendConfig, ...]:
+    """One GlobalStandard deployment per named model, as declared in the Azure inventory."""
+    endpoints = json.loads(source.read_text())["azure_openai_endpoints"]
+    if not 0 <= endpoint_index < len(endpoints):
+        raise ValueError("Azure endpoint index is outside the supplied inventory")
+    endpoint = endpoints[endpoint_index]
+    backends = []
+    for model in models:
+        matches = [
+            item
+            for item in endpoint["deployments"]
+            if item["model"] == model and item["sku"] == "GlobalStandard"
+        ]
+        if len(matches) != 1:
+            raise ValueError(f"Endpoint must declare exactly one GlobalStandard {model} deployment")
+        deployment = matches[0]
+        backends.append(
+            StudyBackendConfig(
+                kind="api",
+                alias=model,
+                model_id=REPORTED_MODEL_ID.get(model, f"{model}-{deployment['version']}"),
+                model_revision=deployment["version"],
+                base_url=endpoint["endpoint"],
+                provider="azure_openai",
+                deployment_name=deployment["deployment_name"],
+                api_version=endpoint["api_version"],
+                reasoning_effort=reasoning_effort,
+                max_output_tokens=max_output_tokens,
+                request_token_reservation=request_token_reservation,
+                timeout_s=timeout_s,
+            )
+        )
+    return tuple(backends)
+
+
+def local_vllm_backends(
+    base_url: str,
+    models: tuple[str, ...],
+    *,
+    model_revision: str,
+    reasoning_effort: ReasoningEffort,
+    max_output_tokens: int,
+    request_token_reservation: int,
+    timeout_s: float,
+    enable_thinking: bool = False,
+    temperature: float = 0,
+    thinking_token_budget: int | None = None,
+) -> tuple[StudyBackendConfig, ...]:
+    """Local multimodal checkpoints; historical calls keep thinking off by default."""
+    if not enable_thinking and reasoning_effort != "none":
+        raise ValueError("Local vLLM backends run with reasoning_effort none (thinking off)")
+    return tuple(
+        StudyBackendConfig(
+            kind="local_vllm",
+            alias=model,
+            model_id=model,
+            model_revision=model_revision,
+            base_url=base_url,
+            provider="openai",
+            reasoning_effort=reasoning_effort,
+            max_output_tokens=max_output_tokens,
+            request_token_reservation=request_token_reservation,
+            timeout_s=timeout_s,
+            enable_thinking=enable_thinking,
+            temperature=temperature,
+            thinking_token_budget=thinking_token_budget,
+        )
+        for model in models
+    )
+
+
+def openai_proxy_backends(
+    config_path: Path | None,
+    models: tuple[str, ...],
+    *,
+    model_revision: str,
+    reasoning_effort: ReasoningEffort,
+    max_output_tokens: int,
+    request_token_reservation: int,
+    timeout_s: float,
+    temperature: float = 0,
+    allow_routed_model_id: bool = False,
+) -> tuple[StudyBackendConfig, ...]:
+    """Use exact discovered model IDs, never infer provider identities from display names."""
+    if not models or len(set(models)) != len(models):
+        raise ValueError("Proxy model IDs must be nonempty and unique")
+    base_url = os.environ.get("INVERSE_PROXY_BASE_URL")
+    if not base_url:
+        raise ValueError("Set INVERSE_PROXY_BASE_URL before configuring proxy backends")
+    aliases = (
+        _object(json.loads(config_path.read_text()), "proxy model aliases")
+        if config_path is not None
+        else {}
+    )
+    backends = []
+    for model in models:
+        model_id = aliases.get(model, model)
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ValueError("Proxy aliases must map to nonempty exact model IDs")
+        backends.append(
+            StudyBackendConfig(
+                kind="openai_proxy",
+                alias=model,
+                model_id=model_id,
+                model_revision=model_revision,
+                base_url=base_url,
+                provider="openai",
+                reasoning_effort=reasoning_effort,
+                max_output_tokens=max_output_tokens,
+                request_token_reservation=request_token_reservation,
+                timeout_s=timeout_s,
+                temperature=temperature,
+                allow_routed_model_id=allow_routed_model_id,
+            )
+        )
+    if len({backend.model_id for backend in backends}) != len(backends):
+        raise ValueError("Proxy aliases must select distinct model IDs")
+    return tuple(backends)
+
+
+class PostImpactKinematics(Record):
+    velocity_mps: tuple[float, float, float]
+    angular_velocity_radps: tuple[float, float, float]
+
+
+class OracleForwardInput(Record):
+    schema_version: Literal["study-forward-oracle-kinematics-v1"] = (
+        "study-forward-oracle-kinematics-v1"
+    )
+    forward: ForwardInput
+    cue_ball_post_impact: PostImpactKinematics
+
+
+class BankSelectionInput(Record):
+    schema_version: Literal["study-bank-selection-v1"] = "study-bank-selection-v1"
+    goal: GoalInput
+    candidates: tuple[CandidateAction, ...] = Field(min_length=2, max_length=32)
+
+    @model_validator(mode="after")
+    def validate_candidates(self) -> Self:
+        if len({candidate.candidate_id for candidate in self.candidates}) != len(self.candidates):
+            raise ValueError("Candidate IDs must be unique")
+        return self
+
+
+class BankSelectionSubmission(Record):
+    candidate_id: str = Field(min_length=1)
+
+
+class PredictedBall(Record):
+    ball_id: str = Field(min_length=1)
+    kind: BallKind
+    status: Literal["on_table", "pocketed"]
+    xy_m: tuple[float, float] | None = None
+
+    @model_validator(mode="after")
+    def check_position(self) -> Self:
+        if (self.status == "on_table") != (self.xy_m is not None):
+            raise ValueError("An on-table prediction needs a position and a pocketed one has none")
+        return self
+
+
+class PredictedLayout(Record):
+    balls: tuple[PredictedBall, ...] = Field(min_length=1, max_length=22)
+
+
+class PredictedFrameV2(Record):
+    time_s: float = Field(ge=0)
+    state: PredictedLayout
+
+
+# Prompt-facing schema: a class docstring here would be sent to the model as its description.
+# Unlike ForwardSubmission it has no third ball status, so every initial ball must be placed.
+class ForwardPrediction(Record):
+    frames: tuple[PredictedFrameV2, ...] = Field(min_length=1, max_length=8)
+    resting_state: PredictedLayout
+    events: tuple[SemanticContact, ...]
+
+    def submission(self) -> ForwardSubmission:
+        return ForwardSubmission.model_validate(self.model_dump(mode="json"))
+
+
+class ForwardQuery(Record):
+    schema_version: Literal["study-forward-v2"] = "study-forward-v2"
+    forward: ForwardInput
+    cue_ball_post_impact: PostImpactKinematics | None = None
+
+
+class BankRankingInput(Record):
+    schema_version: Literal["study-bank-ranking-v1"] = "study-bank-ranking-v1"
+    goal: GoalInput
+    candidates: tuple[CandidateAction, ...] = Field(min_length=2, max_length=32)
+
+    @model_validator(mode="after")
+    def validate_candidates(self) -> Self:
+        if len({candidate.candidate_id for candidate in self.candidates}) != len(self.candidates):
+            raise ValueError("Candidate IDs must be unique")
+        return self
+
+
+class BankRankingSubmission(Record):
+    ranking: tuple[str, ...] = Field(min_length=2, max_length=32)
+
+
+class SimulatedOutcome(Record):
+    resting_state: Layout | None
+    events: tuple[SemanticContact, ...] = ()
+    goal_reached: bool
+    max_position_error_radii: float | None = Field(default=None, ge=0)
+    failure: (
+        Literal["scratch", "inventory_or_pocket_status_mismatch", "position", "simulation_failure"]
+        | None
+    )
+
+    @model_validator(mode="after")
+    def validate_outcome(self) -> Self:
+        if (self.resting_state is None) != (self.failure == "simulation_failure"):
+            raise ValueError("Only a failed simulation lacks a resting state")
+        if self.goal_reached != (self.failure is None):
+            raise ValueError("Goal success and the failure category disagree")
+        return self
+
+
+class AttemptFeedback(Record):
+    attempt: int = Field(ge=1)
+    action: SubmittedAction
+    outcome: SimulatedOutcome | None
+
+
+class FeedbackGoalInput(Record):
+    schema_version: Literal["study-goal-feedback-v1"] = "study-goal-feedback-v1"
+    goal: GoalInput
+    attempt: int = Field(ge=1)
+    max_attempts: int = Field(ge=1, le=16)
+    # None on the first attempt, so every feedback condition shares one opening proposal.
+    simulator_feedback: bool | None
+    history: tuple[AttemptFeedback, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_history(self) -> Self:
+        if self.attempt != len(self.history) + 1 or self.attempt > self.max_attempts:
+            raise ValueError("Attempt number must follow the recorded history within the cap")
+        if (self.attempt == 1) != (self.simulator_feedback is None):
+            raise ValueError("Only the shared first attempt leaves the feedback condition unset")
+        if [item.attempt for item in self.history] != list(range(1, self.attempt)):
+            raise ValueError("History attempts must be numbered consecutively from one")
+        if any((item.outcome is None) == self.simulator_feedback for item in self.history):
+            raise ValueError("Every earlier attempt has an outcome exactly when feedback is on")
+        if any(item.outcome is not None and item.outcome.goal_reached for item in self.history):
+            raise ValueError("A reached goal ends the episode before another attempt")
+        return self
+
+
+class StudyCall(Record):
+    view: Literal["structured", "bev"]
+    input: (
+        OracleForwardInput
+        | BankSelectionInput
+        | FeedbackGoalInput
+        | ForwardQuery
+        | BankRankingInput
+    ) = Field(discriminator="schema_version")
+    images: tuple[RenderedAsset, ...] = ()
+
+    @model_validator(mode="after")
+    def validate_view(self) -> Self:
+        image_inputs = (BankSelectionInput, BankRankingInput, ForwardQuery)
+        if self.view == "bev" and not isinstance(self.input, image_inputs):
+            raise ValueError("This study input has no image variant")
+        if isinstance(self.input, ForwardQuery) and (
+            self.view == "bev" and self.input.cue_ball_post_impact is not None
+        ):
+            raise ValueError("Oracle kinematics are given only with the structured view")
+        self.base_call()
+        return self
+
+    def base_call(self) -> ModelCall:
+        if isinstance(self.input, OracleForwardInput):
+            return ModelCall(view="structured", input=self.input.forward, images=self.images)
+        if isinstance(self.input, ForwardQuery):
+            return ModelCall(view=self.view, input=self.input.forward, images=self.images)
+        return ModelCall(view=self.view, input=self.input.goal, images=self.images)
+
+    def prompt(self) -> str:
+        data = json.loads(self.base_call().prompt())["task"]
+        data["schema_version"] = self.input.schema_version
+        schema: dict[str, object]
+        if isinstance(self.input, OracleForwardInput):
+            data["cue_ball_post_impact_state"] = {
+                **self.input.cue_ball_post_impact.model_dump(mode="json"),
+                "meaning": KINEMATICS_NOTE,
+            }
+            schema = ForwardSubmission.model_json_schema()
+        elif isinstance(self.input, ForwardQuery):
+            if self.input.cue_ball_post_impact is not None:
+                data["cue_ball_post_impact_state"] = {
+                    **self.input.cue_ball_post_impact.model_dump(mode="json"),
+                    "meaning": KINEMATICS_NOTE,
+                }
+            schema = ForwardPrediction.model_json_schema()
+        elif isinstance(self.input, BankRankingInput):
+            data["candidate_actions"] = [
+                candidate.model_dump(mode="json") for candidate in self.input.candidates
+            ]
+            data["ranking_rule"] = RANKING_NOTE
+            schema = BankRankingSubmission.model_json_schema()
+        elif isinstance(self.input, BankSelectionInput):
+            data["candidate_actions"] = [
+                candidate.model_dump(mode="json") for candidate in self.input.candidates
+            ]
+            data["selection_rule"] = SELECTION_NOTE
+            schema = BankSelectionSubmission.model_json_schema()
+        else:
+            data["attempt"] = self.input.attempt
+            data["max_attempts"] = self.input.max_attempts
+            data["history"] = [item.model_dump(mode="json") for item in self.input.history]
+            data["feedback_protocol"] = (
+                FIRST_ATTEMPT_NOTE
+                if self.input.simulator_feedback is None
+                else FEEDBACK_NOTE
+                if self.input.simulator_feedback
+                else REFLECTION_NOTE
+            )
+            schema = GoalSubmission.model_json_schema()
+        return json.dumps(
+            {"task": data, "output_schema": schema},
+            sort_keys=True,
+            separators=(",", ":"),
+            allow_nan=False,
+        )
+
+    def validate_reply(self, text: str) -> None:
+        if isinstance(self.input, OracleForwardInput):
+            ModelAdapter.validate_submission(self.base_call(), text)
+        elif isinstance(self.input, ForwardQuery):
+            submission = ForwardPrediction.model_validate_json(text).submission()
+            ModelAdapter.validate_submission(
+                ModelCall(view="structured", input=self.input.forward),
+                submission.model_dump_json(),
+            )
+        elif isinstance(self.input, BankRankingInput):
+            ranking = BankRankingSubmission.model_validate_json(text).ranking
+            if sorted(ranking) != sorted(c.candidate_id for c in self.input.candidates):
+                raise ValueError("The ranking must list every bank candidate exactly once")
+        elif isinstance(self.input, BankSelectionInput):
+            choice = BankSelectionSubmission.model_validate_json(text)
+            if choice.candidate_id not in {c.candidate_id for c in self.input.candidates}:
+                raise ValueError("Selected candidate is not in the declared bank")
+        else:
+            GoalSubmission.model_validate_json(text)
+
+
+class StudyAdapter(ModelAdapter):
+    """Mirrors the frozen ModelAdapter HTTP exchange for ModelCall and StudyCall prompts.
+
+    Unlike the frozen adapter, an empty completion (e.g. reasoning exhausted the cap) is kept as
+    a billed invalid reply with its usage instead of aborting the run.
+    """
+
+    # Seconds between real requests; a low-throughput deployment is paced so its rate limit
+    # never rejects a request (a rejection would count as a failed attempt).
+    min_request_interval_s = 0.0
+    _next_request_at = 0.0
+
+    def __init__(
+        self,
+        config: BackendConfig,
+        *,
+        transport: httpx.BaseTransport | None = None,
+        api_key: str | None = None,
+        token_provider: Callable[[], str] | None = None,
+    ) -> None:
+        if config.kind == "openai_proxy" and not api_key and token_provider is None:
+            api_key = os.environ.get("INVERSE_PROXY_API_KEY")
+        super().__init__(
+            config, transport=transport, api_key=api_key, token_provider=token_provider
+        )
+
+    def study_request_key(self, call: StudyCall) -> str:
+        return fingerprint(
+            {
+                "backend": self.config.model_dump(mode="json"),
+                "endpoint_hash": fingerprint(self.config.base_url),
+                "call": call.model_dump(mode="json"),
+                "prompt": call.prompt(),
+            }
+        )
+
+    def _exchange(
+        self,
+        prompt: str,
+        images: tuple[RenderedAsset, ...],
+        request_id: str,
+        seed: int,
+        *,
+        output_schema: dict[str, object] | None = None,
+        answer_tag: bool = False,
+    ) -> ModelReply:
+        if (wait := self._next_request_at - monotonic()) > 0:
+            sleep(wait)
+        self._next_request_at = monotonic() + self.min_request_interval_s
+        content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
+        content.extend(
+            {
+                "type": "image_url",
+                "image_url": {"url": "data:image/png;base64," + image.png_base64},
+            }
+            for image in images
+        )
+        headers = {"X-Request-ID": request_id}
+        token = self._token_provider() if self._token_provider is not None else self._api_key
+        if token is not None:
+            headers["Authorization"] = "Bearer " + token
+        thinking = self.config.enable_thinking is True
+        if answer_tag:
+            system = (
+                "Solve the task using the provided images and physical parameters. "
+                "Put the final answer inside <answer>...</answer> using the exact requested tags, "
+                "and stop immediately after </answer>."
+            )
+            if thinking:
+                system = (
+                    "Reason about the physical events first inside <think>...</think> "
+                    "(within 1024 tokens). " + system
+                )
+        else:
+            system = "Return only the requested numerical JSON."
+            if self.config.kind in ("local_vllm", "openai_proxy"):
+                system = VLM_SYSTEM_PROMPT
+            if thinking:
+                system = "Reason about the physical events first. " + system
+        messages = [
+            {"role": "system", "content": system},
+            {"role": "user", "content": content},
+        ]
+        url = self.config.base_url.rstrip("/")
+        params = None
+        if self.config.provider == "azure_openai":
+            url += f"/openai/deployments/{self.config.deployment_name}/chat/completions"
+            params = {"api-version": self.config.api_version}
+            request_payload: dict[str, object] = {
+                "messages": messages,
+                "max_completion_tokens": self.config.max_output_tokens,
+                "reasoning_effort": self.config.reasoning_effort,
+            }
+            if not answer_tag:
+                request_payload["response_format"] = {"type": "json_object"}
+        elif self.config.kind == "openai_proxy" and self.config.reasoning_effort not in (
+            None,
+            "none",
+        ):
+            url += "/chat/completions"
+            request_payload = {
+                "model": self.config.model_id,
+                "messages": messages,
+                "max_completion_tokens": self.config.max_output_tokens,
+                "reasoning_effort": self.config.reasoning_effort,
+            }
+            if answer_tag:
+                request_payload["stop"] = ["</answer>"]
+        else:
+            url += "/chat/completions"
+            request_payload = {
+                "model": self.config.model_id,
+                "messages": messages,
+                "temperature": self.config.temperature,
+                "max_tokens": self.config.max_output_tokens,
+                "seed": seed,
+            }
+            if self.config.kind == "local_vllm" and self.config.reasoning_effort == "none":
+                request_payload["chat_template_kwargs"] = {"enable_thinking": False}
+                if not answer_tag:
+                    request_payload["response_format"] = {"type": "json_object"}
+            elif self.config.kind == "local_vllm" and thinking:
+                request_payload["chat_template_kwargs"] = {"enable_thinking": True}
+                if not answer_tag:
+                    request_payload["response_format"] = {"type": "json_object"}
+            elif self.config.kind == "openai_proxy":
+                request_payload["reasoning_effort"] = self.config.reasoning_effort
+            if self.config.thinking_token_budget is not None:
+                request_payload["thinking_token_budget"] = self.config.thinking_token_budget
+            if self.config.kind == "local_vllm" and answer_tag:
+                request_payload["stop"] = ["</answer>"]
+                request_payload["include_stop_str_in_output"] = True
+            elif self.config.kind == "local_vllm" and output_schema is not None:
+                request_payload["response_format"] = {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "inverser_answer",
+                        "strict": True,
+                        "schema": output_schema,
+                    },
+                }
+        response = self._client.post(url, headers=headers, params=params, json=request_payload)
+        if response.is_error:
+            LOGGER.error(
+                "HTTP %s from backend %s: %s",
+                response.status_code,
+                self.config.alias,
+                response.text[:500],
+            )
+        response.raise_for_status()
+        body = _object(response.json(), "body")
+        returned_model = body.get("model")
+        if not isinstance(returned_model, str) or not returned_model.strip():
+            raise ValueError("Returned model identity must be nonempty text")
+        if returned_model != self.config.model_id and not self.config.allow_routed_model_id:
+            raise ValueError("Returned model identity does not match the configured deployment")
+        choices = body.get("choices")
+        if not isinstance(choices, list) or len(choices) != 1:
+            raise ValueError("Exactly one model response choice is required")
+        choice = _object(choices[0], "choice")
+        message = _object(choice.get("message"), "message")
+        text = message.get("content")
+        if text is not None and not isinstance(text, str):
+            raise ValueError("Model response content must be text")
+        reasoning = message.get("reasoning_content", message.get("reasoning"))
+        if reasoning is not None and not isinstance(reasoning, str):
+            raise ValueError("Model reasoning content must be text")
+        if text is not None:
+            inline_reasoning, text = split_reasoning(text)
+            if reasoning is None:
+                reasoning = inline_reasoning
+        usage_data = body.get("usage")
+        if usage_data is None:
+            LOGGER.warning(
+                "Usage unavailable for backend %s request %s", self.config.alias, request_id
+            )
+            usage = TokenUsage()
+        else:
+            fields = _object(usage_data, "usage")
+            details = fields.get("completion_tokens_details")
+            reasoning_tokens = (
+                _token(_object(details, "completion_tokens_details").get("reasoning_tokens"))
+                if details is not None
+                else None
+            )
+            usage = TokenUsage(
+                input_tokens=_token(fields.get("prompt_tokens")),
+                output_tokens=_token(fields.get("completion_tokens")),
+                total_tokens=_token(fields.get("total_tokens")),
+                reasoning_tokens=reasoning_tokens,
+            )
+        finish_reason = choice.get("finish_reason")
+        if finish_reason is not None and not isinstance(finish_reason, str):
+            raise ValueError("Provider finish_reason must be a string")
+        reply = ModelReply(
+            backend_alias=self.config.alias,
+            model_id=returned_model,
+            content=text or "",
+            usage=usage,
+            finish_reason=finish_reason,
+            reasoning_content=reasoning,
+            requested_model_id=self.config.model_id if self.config.allow_routed_model_id else None,
+        )
+        if not reply.content:
+            raise InvalidModelReply(reply, f"Empty completion (finish_reason={finish_reason})")
+        return reply
+
+    def _complete(self, call: ModelCall, request_id: str) -> ModelReply:
+        reply = self._exchange(call.prompt(), call.images, request_id, call.seed)
+        try:
+            self.validate_submission(call, reply.content)
+        except ValueError as error:
+            raise InvalidModelReply(reply, str(error)) from error
+        return reply
+
+    def complete_study(self, call: StudyCall, request_id: str) -> ModelReply:
+        reply = self._exchange(call.prompt(), call.images, request_id, 0)
+        try:
+            call.validate_reply(reply.content)
+        except ValueError as error:
+            raise InvalidModelReply(reply, str(error)) from error
+        return reply
+
+
+def request_study_model(adapter: StudyAdapter, call: StudyCall, ledger: TrialLedger) -> ModelReply:
+    key = adapter.study_request_key(call)
+    # A shared request (the first feedback attempt) rejected earlier stays rejected, unbilled.
+    if (rejected := ledger.rejected_reply(key)) is not None:
+        raise InvalidModelReply(rejected, "Shared request was rejected earlier")
+    reservation = 0 if adapter.config.kind == "mock" else adapter.config.request_token_reservation
+    cached = ledger.reserve_request(key, reservation)
+    if cached is not None:
+        return cached
+    try:
+        reply = adapter.complete_study(call, key)
+    except InvalidModelReply as error:
+        ledger.finish_request(key, error.reply)
+        ledger.reject_reply(key)
+        raise
+    except httpx.RequestError:
+        ledger.fail_request(key, "transport_response_unknown", unknown_response=True)
+        raise
+    except httpx.HTTPStatusError:
+        ledger.fail_request(key, "http_status_error", unknown_response=False)
+        raise
+    except ValueError:
+        ledger.fail_request(key, "response_identity_format_or_usage_error", unknown_response=False)
+        raise
+    ledger.finish_request(key, reply)
+    return reply
+
+
+class RequestOutcome(Record):
+    reply: ModelReply | None
+    error_code: str | None
+    stop_error: str | None
+
+
+def guarded_request(send: Callable[[], ModelReply]) -> RequestOutcome:
+    """Map one billed request to a row outcome; service errors stop the run without retries."""
+    try:
+        return RequestOutcome(reply=send(), error_code=None, stop_error=None)
+    except InvalidModelReply as error:
+        return RequestOutcome(reply=error.reply, error_code="invalid_submission", stop_error=None)
+    except httpx.HTTPStatusError as error:
+        code = f"http_{error.response.status_code}"
+        LOGGER.error("API service error %s; stopping without retries", code)
+        return RequestOutcome(reply=None, error_code=code, stop_error=code)
+    except httpx.RequestError:
+        LOGGER.error("API transport failed; stopping without rebilling")
+        code = "transport_response_unknown"
+        return RequestOutcome(reply=None, error_code=code, stop_error=code)
+
+
+class CredentialUnavailable(RuntimeError):
+    pass
+
+
+def credential_ready(token_provider: Callable[[], str]) -> bool:
+    """Refresh the credential before a request is reserved, so a failure leaves no stuck row."""
+    try:
+        token_provider()
+    except Exception:
+        LOGGER.exception("Credential refresh failed; stopping before reserving another request")
+        return False
+    return True
+
+
+PACKAGE_ROOT = Path(__file__).resolve().parents[1]
+
+
+def producer_hashes(*names: str) -> dict[str, str]:
+    resolved: dict[str, str] = {}
+    for name in names:
+        matches = list(PACKAGE_ROOT.glob(f"**/{name}"))
+        if len(matches) != 1:
+            raise FileNotFoundError(f"Expected unique module {name} under {PACKAGE_ROOT}")
+        resolved[name] = file_sha256(matches[0])
+    return resolved
+
+
+def require_data_path(output: Path) -> None:
+    if output.is_symlink() or not output.resolve().is_relative_to(
+        (PROJECT_ROOT / "data").resolve()
+    ):
+        raise ValueError("Study artifacts must remain inside the project data directory")
+
+
+def create_artifact_dir(output: Path, reserve_bytes: int) -> None:
+    require_data_path(output)
+    if output.exists():
+        raise ValueError("A new frozen study artifact requires a new output directory")
+    check_storage(reserve_bytes)
+    output.mkdir(parents=True)
+
+
+def lock_run(output: Path, protocol: dict[str, object], *, reserve_bytes: int) -> str:
+    require_data_path(output)
+    run_hash = fingerprint(protocol)
+    manifest = {**protocol, "run_hash": run_hash}
+    path = output / "manifest.json"
+    if path.exists():
+        if json.loads(path.read_text()) != manifest:
+            raise ValueError("Changed study protocol requires a new output directory")
+        return run_hash
+    if output.exists() and any(output.iterdir()):
+        raise ValueError("A new study run requires an empty output directory")
+    check_storage(reserve_bytes)
+    output.mkdir(parents=True, exist_ok=True)
+    write_json(path, manifest)
+    return run_hash
+
+
+def load_job(path: Path, run_hash: str) -> dict[str, object] | None:
+    if not path.exists():
+        return None
+    envelope = JobEnvelope.model_validate_json(path.read_text())
+    if envelope.run_hash != run_hash:
+        raise ValueError("Cached study job belongs to another run")
+    return envelope.payload
+
+
+def save_job(path: Path, run_hash: str, payload: dict[str, object]) -> None:
+    write_json(
+        path,
+        JobEnvelope(
+            run_hash=run_hash, payload=payload, payload_sha256=fingerprint(payload)
+        ).model_dump(mode="json"),
+    )
+
+
+def usage_summary(rows: list[ModelReply]) -> dict[str, object]:
+    def stats(values: list[int]) -> dict[str, float | int] | None:
+        if not values:
+            return None
+        return {
+            "mean": float(np.mean(values)),
+            "median": float(np.median(values)),
+            "max": max(values),
+        }
+
+    replies = [reply for reply in rows if not reply.cached]
+    return {
+        "billed_replies": len(replies),
+        "shared_cached_replies": len(rows) - len(replies),
+        "input_tokens": stats(
+            [r.usage.input_tokens for r in replies if r.usage.input_tokens is not None]
+        ),
+        "output_tokens": stats(
+            [r.usage.output_tokens for r in replies if r.usage.output_tokens is not None]
+        ),
+        "usage_unavailable": sum(r.usage.total_tokens is None for r in replies),
+        "reasoning_tokens": stats(
+            [r.usage.reasoning_tokens for r in replies if r.usage.reasoning_tokens is not None]
+        ),
+        "reasoning_usage_unavailable": sum(r.usage.reasoning_tokens is None for r in replies),
+        "finish_reasons": dict(Counter(str(r.finish_reason) for r in replies)),
+    }
+
+
+def endpoint_tolerance_profile(score: EndpointScore, radius_m: float) -> dict[str, bool]:
+    return {
+        str(k): score.failure in (None, "position")
+        and score.max_position_error_m is not None
+        and score.max_position_error_m <= k * radius_m
+        for k in TOLERANCE_RADII
+    }
+
+
+def forward_tolerance_profile(
+    prediction: ForwardSubmission, truth: ForwardSubmission, score: ForwardScore, radius_m: float
+) -> dict[str, dict[str, bool]]:
+    statuses = {ball.ball_id: ball.status for ball in truth.resting_state.balls}
+    resting_status_match = all(
+        ball.status == statuses[ball.ball_id] for ball in prediction.resting_state.balls
+    )
+    frames_error = score.maximum_position_error_m
+    resting_error = score.resting_max_position_error_m
+    return {
+        "frames": {
+            str(k): score.status_mismatches == 0
+            and (frames_error is None or frames_error <= k * radius_m)
+            for k in TOLERANCE_RADII
+        },
+        "resting": {
+            str(k): resting_status_match
+            and (resting_error is None or resting_error <= k * radius_m)
+            for k in TOLERANCE_RADII
+        },
+    }

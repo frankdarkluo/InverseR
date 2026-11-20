@@ -1,0 +1,1089 @@
+{
+  "arms": {
+    "base": {
+      "T4": {
+        "count": 0,
+        "n": 240,
+        "rate": 0
+      },
+      "T5_by_attempt": {
+        "1": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "2": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "3": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "4": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "5": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "6": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        }
+      },
+      "T5_by_regime_and_attempt": {
+        "standard": {
+          "1": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "2": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "3": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "4": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "5": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "6": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          }
+        },
+        "unknown_friction": {
+          "1": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "2": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "3": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "4": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "5": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "6": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          }
+        }
+      },
+      "forward": {
+        "all": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 215,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 31,
+            "n": 134,
+            "rate": 0.23134328358208955
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.18756944444444443,
+            "S_total_3r": 0.24377314814814813,
+            "T1": 0.48333333333333334,
+            "T1_per_ball": 0.5791666666666667,
+            "T2": 0.12916666666666668,
+            "T2_cushion_set": 0.16666666666666666,
+            "T3": 0.00954861111111111,
+            "T3_1r": 0.00954861111111111,
+            "T3_2r": 0.02841435185185185,
+            "T3_3r": 0.05005787037037037,
+            "T3_5r": 0.0859375,
+            "cushion_sequence_exact": 0.12916666666666668,
+            "first_contact_exact": 0.49166666666666664
+          },
+          "n": 240,
+          "stasis_given_true_collision_and_valid": {
+            "count": 3,
+            "n": 103,
+            "rate": 0.02912621359223301
+          },
+          "valid": 184
+        },
+        "center": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 55,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 6,
+            "n": 44,
+            "rate": 0.13636363636363635
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.18194444444444444,
+            "S_total_3r": 0.25805555555555554,
+            "T1": 0.45,
+            "T1_per_ball": 0.5611111111111111,
+            "T2": 0.13333333333333333,
+            "T2_cushion_set": 0.16666666666666666,
+            "T3": 0.017361111111111112,
+            "T3_1r": 0.017361111111111112,
+            "T3_2r": 0.05648148148148148,
+            "T3_3r": 0.09930555555555555,
+            "T3_5r": 0.1525462962962963,
+            "cushion_sequence_exact": 0.13333333333333333,
+            "first_contact_exact": 0.48333333333333334
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 0,
+            "n": 38,
+            "rate": 0
+          },
+          "valid": 50
+        },
+        "free_roll": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 47,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.3,
+            "S_total_3r": 0.305,
+            "T1": 0.7833333333333333,
+            "T1_per_ball": 0.7833333333333333,
+            "T2": 0.21666666666666667,
+            "T2_cushion_set": 0.23333333333333334,
+            "T3": 0.0,
+            "T3_1r": 0.0,
+            "T3_2r": 0.0,
+            "T3_3r": 0.0,
+            "T3_5r": 0.0,
+            "cushion_sequence_exact": 0.21666666666666667,
+            "first_contact_exact": 0.7833333333333333
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "valid": 47
+        },
+        "planar": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 102,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 6,
+            "n": 44,
+            "rate": 0.13636363636363635
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.24097222222222223,
+            "S_total_3r": 0.28152777777777777,
+            "T1": 0.6166666666666667,
+            "T1_per_ball": 0.6722222222222222,
+            "T2": 0.175,
+            "T2_cushion_set": 0.2,
+            "T3": 0.008680555555555556,
+            "T3_1r": 0.008680555555555556,
+            "T3_2r": 0.02824074074074074,
+            "T3_3r": 0.049652777777777775,
+            "T3_5r": 0.07627314814814815,
+            "cushion_sequence_exact": 0.175,
+            "first_contact_exact": 0.6333333333333333
+          },
+          "n": 120,
+          "stasis_given_true_collision_and_valid": {
+            "count": 0,
+            "n": 38,
+            "rate": 0
+          },
+          "valid": 97
+        },
+        "side": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 57,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 15,
+            "n": 43,
+            "rate": 0.3488372093023256
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.11,
+            "S_total_3r": 0.185,
+            "T1": 0.3,
+            "T1_per_ball": 0.4527777777777778,
+            "T2": 0.06666666666666667,
+            "T2_cushion_set": 0.11666666666666667,
+            "T3": 0.0,
+            "T3_1r": 0.0,
+            "T3_2r": 0.025925925925925925,
+            "T3_3r": 0.035416666666666666,
+            "T3_5r": 0.08055555555555555,
+            "cushion_sequence_exact": 0.06666666666666667,
+            "first_contact_exact": 0.3
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 2,
+            "n": 28,
+            "rate": 0.07142857142857142
+          },
+          "valid": 41
+        },
+        "spin": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 113,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 25,
+            "n": 90,
+            "rate": 0.2777777777777778
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.13416666666666666,
+            "S_total_3r": 0.20601851851851852,
+            "T1": 0.35,
+            "T1_per_ball": 0.4861111111111111,
+            "T2": 0.08333333333333333,
+            "T2_cushion_set": 0.13333333333333333,
+            "T3": 0.010416666666666666,
+            "T3_1r": 0.010416666666666666,
+            "T3_2r": 0.02858796296296296,
+            "T3_3r": 0.05046296296296296,
+            "T3_5r": 0.09560185185185185,
+            "cushion_sequence_exact": 0.08333333333333333,
+            "first_contact_exact": 0.35
+          },
+          "n": 120,
+          "stasis_given_true_collision_and_valid": {
+            "count": 3,
+            "n": 65,
+            "rate": 0.046153846153846156
+          },
+          "valid": 87
+        },
+        "vertical": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 56,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 10,
+            "n": 47,
+            "rate": 0.2127659574468085
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.15833333333333333,
+            "S_total_3r": 0.22703703703703704,
+            "T1": 0.4,
+            "T1_per_ball": 0.5194444444444445,
+            "T2": 0.1,
+            "T2_cushion_set": 0.15,
+            "T3": 0.020833333333333332,
+            "T3_1r": 0.020833333333333332,
+            "T3_2r": 0.03125,
+            "T3_3r": 0.06550925925925925,
+            "T3_5r": 0.11064814814814815,
+            "cushion_sequence_exact": 0.1,
+            "first_contact_exact": 0.4
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 1,
+            "n": 37,
+            "rate": 0.02702702702702703
+          },
+          "valid": 46
+        }
+      },
+      "public_episode_solved": {
+        "count": 0,
+        "n": 0,
+        "rate": null
+      },
+      "public_exact_answer": {
+        "count": 0,
+        "n": 0,
+        "rate": null
+      }
+    },
+    "sft400": {
+      "T4": {
+        "count": 0,
+        "n": 240,
+        "rate": 0
+      },
+      "T5_by_attempt": {
+        "1": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "2": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "3": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "4": {
+          "count": 0,
+          "n": 240,
+          "rate": 0
+        },
+        "5": {
+          "count": 2,
+          "n": 240,
+          "rate": 0.008333333333333333
+        },
+        "6": {
+          "count": 2,
+          "n": 240,
+          "rate": 0.008333333333333333
+        }
+      },
+      "T5_by_regime_and_attempt": {
+        "standard": {
+          "1": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "2": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "3": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "4": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "5": {
+            "count": 2,
+            "n": 240,
+            "rate": 0.008333333333333333
+          },
+          "6": {
+            "count": 2,
+            "n": 240,
+            "rate": 0.008333333333333333
+          }
+        },
+        "unknown_friction": {
+          "1": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "2": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "3": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "4": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "5": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "6": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          }
+        }
+      },
+      "forward": {
+        "all": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 209,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 16,
+            "n": 134,
+            "rate": 0.11940298507462686
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 240,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.28076388888888887,
+            "S_total_3r": 0.3587037037037037,
+            "T1": 0.5666666666666667,
+            "T1_per_ball": 0.6611111111111111,
+            "T2": 0.17083333333333334,
+            "T2_cushion_set": 0.225,
+            "T3": 0.14878472222222222,
+            "T3_1r": 0.14878472222222222,
+            "T3_2r": 0.20596064814814816,
+            "T3_3r": 0.23217592592592592,
+            "T3_5r": 0.25850694444444444,
+            "cushion_sequence_exact": 0.17083333333333334,
+            "first_contact_exact": 0.575
+          },
+          "n": 240,
+          "stasis_given_true_collision_and_valid": {
+            "count": 23,
+            "n": 118,
+            "rate": 0.19491525423728814
+          },
+          "valid": 200
+        },
+        "center": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 48,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 5,
+            "n": 44,
+            "rate": 0.11363636363636363
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.33425925925925926,
+            "S_total_3r": 0.4312037037037037,
+            "T1": 0.5,
+            "T1_per_ball": 0.65,
+            "T2": 0.31666666666666665,
+            "T2_cushion_set": 0.35,
+            "T3": 0.22314814814814815,
+            "T3_1r": 0.22314814814814815,
+            "T3_2r": 0.29560185185185184,
+            "T3_3r": 0.3280092592592593,
+            "T3_5r": 0.35532407407407407,
+            "cushion_sequence_exact": 0.31666666666666665,
+            "first_contact_exact": 0.5
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 10,
+            "n": 39,
+            "rate": 0.2564102564102564
+          },
+          "valid": 54
+        },
+        "free_roll": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 46,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.29333333333333333,
+            "S_total_3r": 0.31166666666666665,
+            "T1": 0.7333333333333333,
+            "T1_per_ball": 0.7333333333333333,
+            "T2": 0.23333333333333334,
+            "T2_cushion_set": 0.25,
+            "T3": 0.008333333333333333,
+            "T3_1r": 0.008333333333333333,
+            "T3_2r": 0.027777777777777776,
+            "T3_3r": 0.041666666666666664,
+            "T3_5r": 0.06388888888888888,
+            "cushion_sequence_exact": 0.23333333333333334,
+            "first_contact_exact": 0.7333333333333333
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 0,
+            "n": 0,
+            "rate": null
+          },
+          "valid": 44
+        },
+        "planar": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 94,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 5,
+            "n": 44,
+            "rate": 0.11363636363636363
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.3137962962962963,
+            "S_total_3r": 0.3714351851851852,
+            "T1": 0.6166666666666667,
+            "T1_per_ball": 0.6916666666666667,
+            "T2": 0.275,
+            "T2_cushion_set": 0.3,
+            "T3": 0.11574074074074074,
+            "T3_1r": 0.11574074074074074,
+            "T3_2r": 0.16168981481481481,
+            "T3_3r": 0.18483796296296295,
+            "T3_5r": 0.20960648148148148,
+            "cushion_sequence_exact": 0.275,
+            "first_contact_exact": 0.6166666666666667
+          },
+          "n": 120,
+          "stasis_given_true_collision_and_valid": {
+            "count": 10,
+            "n": 39,
+            "rate": 0.2564102564102564
+          },
+          "valid": 98
+        },
+        "side": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 55,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 3,
+            "n": 43,
+            "rate": 0.06976744186046512
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.26611111111111113,
+            "S_total_3r": 0.36916666666666664,
+            "T1": 0.55,
+            "T1_per_ball": 0.6638888888888889,
+            "T2": 0.11666666666666667,
+            "T2_cushion_set": 0.18333333333333332,
+            "T3": 0.16527777777777777,
+            "T3_1r": 0.16527777777777777,
+            "T3_2r": 0.25300925925925927,
+            "T3_3r": 0.2875,
+            "T3_5r": 0.31550925925925927,
+            "cushion_sequence_exact": 0.11666666666666667,
+            "first_contact_exact": 0.5833333333333334
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 2,
+            "n": 40,
+            "rate": 0.05
+          },
+          "valid": 53
+        },
+        "spin": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 115,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 11,
+            "n": 90,
+            "rate": 0.12222222222222222
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 120,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.24773148148148147,
+            "S_total_3r": 0.34597222222222224,
+            "T1": 0.5166666666666667,
+            "T1_per_ball": 0.6305555555555555,
+            "T2": 0.06666666666666667,
+            "T2_cushion_set": 0.15,
+            "T3": 0.1818287037037037,
+            "T3_1r": 0.1818287037037037,
+            "T3_2r": 0.2502314814814815,
+            "T3_3r": 0.2795138888888889,
+            "T3_5r": 0.3074074074074074,
+            "cushion_sequence_exact": 0.06666666666666667,
+            "first_contact_exact": 0.5333333333333333
+          },
+          "n": 120,
+          "stasis_given_true_collision_and_valid": {
+            "count": 13,
+            "n": 79,
+            "rate": 0.16455696202531644
+          },
+          "valid": 102
+        },
+        "vertical": {
+          "all_coordinates_given_wrong_event": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "invalid_given_true_collision": {
+            "count": 8,
+            "n": 47,
+            "rate": 0.1702127659574468
+          },
+          "joint_event_and_all_coordinates": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "joint_normalized_event_and_3r": {
+            "count": 0,
+            "n": 60,
+            "rate": 0
+          },
+          "mean": {
+            "S_total": 0.22935185185185186,
+            "S_total_3r": 0.3227777777777778,
+            "T1": 0.48333333333333334,
+            "T1_per_ball": 0.5972222222222222,
+            "T2": 0.016666666666666666,
+            "T2_cushion_set": 0.11666666666666667,
+            "T3": 0.19837962962962963,
+            "T3_1r": 0.19837962962962963,
+            "T3_2r": 0.2474537037037037,
+            "T3_3r": 0.27152777777777776,
+            "T3_5r": 0.29930555555555555,
+            "cushion_sequence_exact": 0.016666666666666666,
+            "first_contact_exact": 0.48333333333333334
+          },
+          "n": 60,
+          "stasis_given_true_collision_and_valid": {
+            "count": 11,
+            "n": 39,
+            "rate": 0.28205128205128205
+          },
+          "valid": 49
+        }
+      },
+      "public_episode_solved": {
+        "count": 0,
+        "n": 0,
+        "rate": null
+      },
+      "public_exact_answer": {
+        "count": 0,
+        "n": 0,
+        "rate": null
+      }
+    }
+  },
+  "figures": [
+    "regime_transfer.svg",
+    "causal_alignment.svg",
+    "reasoning_pareto_0.svg"
+  ],
+  "new_model_requests": 0,
+  "new_simulator_evaluations": 0,
+  "paired": {
+    "base_minus_sft400": {
+      "S_total": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.13282523148148148,
+          -0.05361053240740742
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.09319444444444444,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "S_total_3r": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.15479282407407408,
+          -0.07372627314814817
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.11493055555555556,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T1": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.15833333333333333,
+          -0.004166666666666667
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.08333333333333333,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T1_per_ball": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.1513888888888889,
+          -0.011805555555555554
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.08194444444444443,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T2": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.10833333333333334,
+          0.025
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.041666666666666664,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T2_cushion_set": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.12916666666666668,
+          0.0125
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.058333333333333334,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T3": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.17239583333333333,
+          -0.10827546296296298
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.13923611111111114,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T3_1r": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.17239583333333333,
+          -0.10827546296296298
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.13923611111111114,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T3_2r": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.21354166666666663,
+          -0.14178240740740744
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.1775462962962963,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T3_3r": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.21979311342592592,
+          -0.14502170138888892
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.18211805555555555,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T3_5r": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.2111125578703704,
+          -0.13466290509259266
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.17256944444444444,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T4": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          0.0,
+          0.0
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": 0.0,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "T5": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.020833333333333332,
+          0.0
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.008333333333333333,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "cushion_sequence_exact": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.10833333333333334,
+          0.025
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.041666666666666664,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      },
+      "first_contact_exact": {
+        "bootstrap_repetitions": 10000,
+        "bootstrap_seed": 20261119,
+        "confidence_interval": [
+          -0.15833333333333333,
+          -0.008333333333333333
+        ],
+        "confidence_level": 0.95,
+        "independent_groups": 120,
+        "mean_difference_a_minus_b": -0.08333333333333333,
+        "paired_rows": 240,
+        "weighting": "equal_source_layout_groups"
+      }
+    }
+  },
+  "schema_version": "capo-analysis-v1",
+  "sources": {
+    "base": {
+      "evaluation_cohort": "0e4c35401f3a03431d8e7ad6acca4cc8df3af1c5b6f592db78250ee1af595eff",
+      "forward_reasoning_tokens": 1013.8875,
+      "job_hashes_sha256": "d5fb3c341e594e7c6408dd9208a7b372b48361e3d0bee70e4b00ba8d29e947b8",
+      "manifest_sha256": "4e5ba4fabf26c68bc90d75aa20dedee455a91dd2f3c74a3226dba2f404bd9941",
+      "model_requests": 1920,
+      "reported_usage": {
+        "input_tokens": 4398296,
+        "output_tokens": 2300763,
+        "reasoning_tokens": 1923107,
+        "total_tokens": 6699059
+      }
+    },
+    "sft400": {
+      "evaluation_cohort": "0e4c35401f3a03431d8e7ad6acca4cc8df3af1c5b6f592db78250ee1af595eff",
+      "forward_reasoning_tokens": 980.5125,
+      "job_hashes_sha256": "a5575b79fb499552146d07e3ae8b044a8feac98448f334db0d9ee845b988a5a8",
+      "manifest_sha256": "27f512744021a5b19d6ac6fdad601c02f2fe28f8c5254f5cdf3e4a65878a6071",
+      "model_requests": 1918,
+      "reported_usage": {
+        "input_tokens": 4541382,
+        "output_tokens": 2075465,
+        "reasoning_tokens": 1787632,
+        "total_tokens": 6616847
+      }
+    }
+  }
+}

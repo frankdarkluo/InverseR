@@ -5,6 +5,11 @@ from inverser.schemas import BallPosition, CueAction, Layout, PhysicsConfig, Sho
 from inverser.study import make_study_case
 
 
+@pytest.fixture(autouse=True)
+def _disable_wandb_by_default(monkeypatch):
+    monkeypatch.setenv("WANDB_DISABLED", "true")
+
+
 @pytest.fixture
 def study_fixture():
     simulator = SnookerSimulator(PhysicsConfig())

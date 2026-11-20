@@ -3,13 +3,12 @@ import json
 import httpx
 import pytest
 from pydantic import ValidationError
-from test_azure_study import azure_inventory
 
 from inverser import study_calls
-from inverser.baselines import make_action_bank
 from inverser.evaluation import BudgetLimits, TrialLedger, UnresolvedRequest, request_model
 from inverser.model_adapters import BackendConfig, ModelAdapter, ModelCall, rendered_asset
-from inverser.study import GoalSubmission
+from inverser.schemas import CueAction
+from inverser.study import CandidateAction, GoalSubmission
 from inverser.study_calls import (
     FEEDBACK_NOTE,
     FIRST_ATTEMPT_NOTE,
@@ -26,17 +25,59 @@ from inverser.study_calls import (
     StudyCall,
     azure_model_backends,
     guarded_request,
+    local_vllm_backends,
     request_study_model,
-    study_azure_backends,
 )
 
 TIMES = (0.25, 0.5, 1.0)
 
 
+def make_candidates(count: int) -> tuple[CandidateAction, ...]:
+    return tuple(
+        CandidateAction(
+            candidate_id=f"cand_{index}",
+            action=CueAction(
+                azimuth_deg=(35.0 * index) % 360.0,
+                cue_speed_mps=1.0,
+                tip_side=0.0,
+                tip_vertical=0.0,
+            ),
+        )
+        for index in range(count)
+    )
+
+
+def azure_inventory(tmp_path):
+    path = tmp_path / "azure-inventory.json"
+    path.write_text(
+        json.dumps(
+            {
+                "azure_openai_endpoints": [
+                    {
+                        "endpoint": "https://fixture.openai.azure.com/",
+                        "api_version": "2024-12-01-preview",
+                        "deployments": [
+                            {
+                                "model": model,
+                                "deployment_name": model,
+                                "sku": "GlobalStandard",
+                                "version": "2025-08-07",
+                            }
+                            for model in ("gpt-5-mini", "gpt-5")
+                        ],
+                    }
+                ],
+            }
+        )
+    )
+    return path
+
+
 def backends(tmp_path, effort="high"):
-    return study_azure_backends(
+    return azure_model_backends(
         azure_inventory(tmp_path),
         0,
+        ("gpt-5-mini", "gpt-5"),
         reasoning_effort=effort,
         max_output_tokens=32768,
         request_token_reservation=40960,
@@ -157,7 +198,7 @@ def test_empty_completion_is_billed_as_invalid_without_aborting(tmp_path, study_
         view="structured",
         input=BankSelectionInput(
             goal=case.goal_input(),
-            candidates=make_action_bank(case.case_id, count=2, seed=3).candidates,
+            candidates=make_candidates(2),
         ),
     )
     with StudyAdapter(
@@ -203,17 +244,17 @@ def test_study_prompts_extend_frozen_tasks_with_only_declared_fields(study_fixtu
         oracle.validate_reply('{"bad":1}')
 
     goal = case.goal_input()
-    bank = make_action_bank(case.case_id, count=3, seed=1)
+    candidates = make_candidates(3)
     selection = StudyCall(
-        view="structured", input=BankSelectionInput(goal=goal, candidates=bank.candidates)
+        view="structured", input=BankSelectionInput(goal=goal, candidates=candidates)
     )
     assert len(task(selection)["candidate_actions"]) == 3 and "goal" in task(selection)
-    selection.validate_reply(json.dumps({"candidate_id": bank.candidates[1].candidate_id}))
+    selection.validate_reply(json.dumps({"candidate_id": candidates[1].candidate_id}))
     with pytest.raises(ValueError, match="not in the declared bank"):
         selection.validate_reply('{"candidate_id":"unknown"}')
     image = StudyCall(
         view="bev",
-        input=BankSelectionInput(goal=goal, candidates=bank.candidates),
+        input=BankSelectionInput(goal=goal, candidates=candidates),
         images=tuple(
             rendered_asset(goal, role, goal.physics.table) for role in ("initial", "goal")
         ),
@@ -282,7 +323,7 @@ def test_feedback_history_is_consecutive_and_matches_the_feedback_condition(stud
 def test_study_requests_share_the_frozen_adapter_shape_and_bill_once(tmp_path, study_fixture):
     _, record, case = study_fixture
     goal = case.goal_input()
-    bank = make_action_bank(case.case_id, count=3, seed=1)
+    candidates = make_candidates(3)
     seen = []
 
     def handler(request):
@@ -290,7 +331,7 @@ def test_study_requests_share_the_frozen_adapter_shape_and_bill_once(tmp_path, s
         body = json.loads(request.content)
         content = json.loads(body["messages"][1]["content"][0]["text"])["task"]
         reply = (
-            {"candidate_id": "unknown" if len(seen) > 2 else bank.candidates[0].candidate_id}
+            {"candidate_id": "unknown" if len(seen) > 2 else candidates[0].candidate_id}
             if "candidate_actions" in content
             else GoalSubmission(action=record.witness_action.model_dump()).model_dump(mode="json")
         )
@@ -308,7 +349,7 @@ def test_study_requests_share_the_frozen_adapter_shape_and_bill_once(tmp_path, s
         BudgetLimits(max_model_requests=3, max_physics_evaluations=0, max_total_tokens=200000),
     )
     selection = StudyCall(
-        view="structured", input=BankSelectionInput(goal=goal, candidates=bank.candidates)
+        view="structured", input=BankSelectionInput(goal=goal, candidates=candidates)
     )
     with StudyAdapter(
         backends(tmp_path)[0].model_copy(update={"execution_authorized": True}),
@@ -327,7 +368,7 @@ def test_study_requests_share_the_frozen_adapter_shape_and_bill_once(tmp_path, s
         assert seen[0].headers["Authorization"] == seen[1].headers["Authorization"]
         changed = StudyCall(
             view="structured",
-            input=BankSelectionInput(goal=goal, candidates=tuple(reversed(bank.candidates))),
+            input=BankSelectionInput(goal=goal, candidates=tuple(reversed(candidates))),
         )
         outcome = guarded_request(lambda: request_study_model(adapter, changed, ledger))
         assert (outcome.error_code, outcome.stop_error) == ("invalid_submission", None)
@@ -349,7 +390,7 @@ def test_service_errors_stop_without_retry(tmp_path, study_fixture):
         view="structured",
         input=BankSelectionInput(
             goal=case.goal_input(),
-            candidates=make_action_bank(case.case_id, count=2, seed=3).candidates,
+            candidates=make_candidates(2),
         ),
     )
     with StudyAdapter(
@@ -403,12 +444,12 @@ def test_forward_v2_prompt_forbids_abstention_and_validates_truth(tmp_path, stud
 
 def test_bank_ranking_requires_a_full_permutation_and_models_load_by_name(tmp_path, study_fixture):
     _, _, case = study_fixture
-    bank = make_action_bank(case.case_id, count=4, seed=2)
+    candidates = make_candidates(4)
     call = StudyCall(
         view="structured",
-        input=BankRankingInput(goal=case.goal_input(), candidates=bank.candidates),
+        input=BankRankingInput(goal=case.goal_input(), candidates=candidates),
     )
-    ids = [candidate.candidate_id for candidate in bank.candidates]
+    ids = [candidate.candidate_id for candidate in candidates]
     assert len(task(call)["candidate_actions"]) == 4 and "ranking_rule" in task(call)
     call.validate_reply(json.dumps({"ranking": list(reversed(ids))}))
     for bad in (ids[:3], [*ids[:3], ids[0]], [*ids[:3], "other"]):
@@ -479,3 +520,53 @@ def test_partner_models_check_the_identity_their_deployment_reports(tmp_path):
     )
     assert (deepseek.model_id, deepseek.model_revision) == ("default", "2026-04-23")
     assert deepseek.reasoning_effort == "none"
+
+
+def local_backend(effort="none", url="http://127.0.0.1:8000/v1"):
+    return local_vllm_backends(
+        url,
+        ("Qwen3.5-9B",),
+        model_revision="abc123",
+        reasoning_effort=effort,
+        max_output_tokens=4096,
+        request_token_reservation=16384,
+        timeout_s=120,
+    )[0]
+
+
+def test_local_vllm_backends_request_json_mode_without_thinking_or_credentials(study_fixture):
+    _, record, case = study_fixture
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        content = GoalSubmission(action=record.witness_action.model_dump()).model_dump_json()
+        return httpx.Response(
+            200,
+            json={
+                "model": "Qwen3.5-9B",
+                "choices": [{"message": {"content": content}, "finish_reason": "stop"}],
+                "usage": {"prompt_tokens": 7, "completion_tokens": 9, "total_tokens": 16},
+            },
+        )
+
+    backend = local_backend()
+    assert (backend.kind, backend.provider) == ("local_vllm", "openai")
+    assert backend.model_id == "Qwen3.5-9B"
+    with StudyAdapter(
+        backend.model_copy(update={"execution_authorized": True}),
+        transport=httpx.MockTransport(handler),
+    ) as adapter:
+        call = ModelCall(view="structured", input=case.goal_input())
+        assert adapter._complete(call, "rid").content
+    payload = json.loads(seen[0].content)
+    assert str(seen[0].url) == "http://127.0.0.1:8000/v1/chat/completions"
+    assert "authorization" not in seen[0].headers
+    assert payload["response_format"] == {"type": "json_object"}
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert payload["model"] == "Qwen3.5-9B" and payload["temperature"] == 0
+    assert payload["max_tokens"] == 4096
+    with pytest.raises(ValueError, match="none"):
+        local_backend(effort="low")
+    with pytest.raises(ValidationError):
+        local_backend(url="http://10.0.0.1:8000/v1")

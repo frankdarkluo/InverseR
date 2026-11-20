@@ -7,6 +7,9 @@ dist/
 
 # Virtual environments and local configuration
 .venv/
+.venv-train/
+.venv-iphyre/
+.venv-phyre/
 venv/
 env/
 .env
@@ -30,9 +33,31 @@ coverage.xml
 .DS_Store
 Thumbs.db
 
-# Local datasets and generated experiment outputs
+# Local datasets and generated experiment outputs (track READMEs and compact receipts only)
 /data/*
 !/data/README.md
+!/data/research/
+/data/research/*
+!/data/research/inverser-vlm-v1/
+/data/research/inverser-vlm-v1/*
+!/data/research/inverser-vlm-v1/train/
+/data/research/inverser-vlm-v1/train/*
+!/data/research/inverser-vlm-v1/train/manifest.json
+!/data/research/inverser-vlm-v1/valid/
+/data/research/inverser-vlm-v1/valid/*
+!/data/research/inverser-vlm-v1/valid/manifest.json
+!/data/research/inverser-vlm-v1/test/
+/data/research/inverser-vlm-v1/test/*
+!/data/research/inverser-vlm-v1/test/manifest.json
+!/data/research/capo-sft-tag-400step-bs32-seed20261119-v1/
+/data/research/capo-sft-tag-400step-bs32-seed20261119-v1/*
+!/data/research/capo-sft-tag-400step-bs32-seed20261119-v1/manifest.json
+!/data/research/capo-sft-tag-400step-bs32-seed20261119-v1/summary.json
+!/data/research/capo-valid-base-vs-sft400-analysis-v1/
+/data/research/capo-valid-base-vs-sft400-analysis-v1/*
+!/data/research/capo-valid-base-vs-sft400-analysis-v1/analysis.json
+!/data/research/capo-valid-base-vs-sft400-analysis-v1/table.csv
+!/data/research/capo-valid-base-vs-sft400-analysis-v1/*.svg
 /artifacts/*
 !/artifacts/README.md
 

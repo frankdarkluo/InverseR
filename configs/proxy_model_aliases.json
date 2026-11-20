@@ -1,0 +1,9 @@
+{
+  "GPT-5.6 Sol": "gpt-5.6-sol",
+  "GPT-5.6 Terra": "gpt-5.6-terra",
+  "GPT-6.1 Sol": "gpt-6.1-sol",
+  "GPT-6.1 Terra": "gpt-6.1-terra",
+  "GPT-6.2 Astra": "gpt-6.2-astra",
+  "Gemini-3.8-Flash": "gemini-3.8-flash",
+  "Qwen3.6-Plus": "qwen3.6-plus"
+}

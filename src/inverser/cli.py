@@ -1,48 +1,11 @@
 import argparse
 import json
 import logging
-import os
-from collections.abc import Callable
 from pathlib import Path
-
-EFFORTS = ["minimal", "low", "medium", "high"]
-
-
-def _with_azure_token(run: Callable[[Callable[[], str]], dict[str, object]]) -> dict[str, object]:
-    from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-
-    # The simulator later points HOME at an isolated Pooltool home; token refreshes from the
-    # Azure CLI must keep reading the real login, so pin its config directory first.
-    os.environ.setdefault("AZURE_CONFIG_DIR", str(Path.home() / ".azure"))
-    logging.getLogger("azure").setLevel(logging.WARNING)
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    with DefaultAzureCredential(exclude_interactive_browser_credential=True) as credential:
-        return run(
-            get_bearer_token_provider(credential, "https://cognitiveservices.azure.com/.default")
-        )
-
-
-def _study_api_arguments(parser: argparse.ArgumentParser, **defaults: int) -> None:
-    parser.add_argument("--azure-config", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--endpoint-index", type=int, default=4)
-    parser.add_argument("--max-requests", type=int, default=defaults["requests"])
-    parser.add_argument("--max-total-tokens", type=int, default=defaults["tokens"])
-    parser.add_argument("--max-output-tokens", type=int, default=defaults["output"])
-    parser.add_argument("--request-token-reservation", type=int, default=defaults["reservation"])
-    parser.add_argument("--execute", action="store_true")
-
-
-def _study_result(report: dict[str, object], args: argparse.Namespace) -> dict[str, object]:
-    if report["status"] == "planned_no_calls":
-        return report
-    brief = {key: value for key, value in report.items() if not isinstance(value, list)}
-    brief["summary_file"] = str(args.output / "summary.json")
-    return brief
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="InverseR data-quality pilot tools")
+    parser = argparse.ArgumentParser(description="InverseR benchmark, CAPO training, and eval CLI")
     commands = parser.add_subparsers(dest="command", required=True)
     generate = commands.add_parser("generate-pilot", help="Generate at most 5000 pre-G1 tasks")
     generate.add_argument("--output", type=Path, required=True)
@@ -54,299 +17,175 @@ def main() -> int:
     preview = commands.add_parser("preview", help="Render public endpoint-only task pairs")
     preview.add_argument("--input", type=Path, required=True)
     preview.add_argument("--output", type=Path, required=True)
-    acquire = commands.add_parser(
-        "acquire-source-pilot", help="Acquire only rights-qualified samples"
-    )
-    acquire.add_argument("--registry", type=Path, default=Path("configs/sources.json"))
-    acquire.add_argument("--output", type=Path, required=True)
-    sources = commands.add_parser("source-catalog", help="Show verified source states and blockers")
-    sources.add_argument("--registry", type=Path, default=Path("configs/sources.json"))
-    hf_download = commands.add_parser(
-        "download-hf-source", help="Acquire an explicitly requested public repository snapshot"
-    )
-    hf_download.add_argument("--registry", type=Path, default=Path("configs/sources.json"))
-    hf_download.add_argument("--output", type=Path, required=True)
-    hf_download.add_argument("--max-workers", type=int, default=4)
-    archive = commands.add_parser(
-        "wait-import-archive", help="Wait for a stable complete ZIP, then safely extract and verify"
-    )
-    archive.add_argument("--archive", type=Path, required=True)
-    archive.add_argument("--output", type=Path, required=True)
-    archive.add_argument("--stable-seconds", type=float, default=120)
-    archive.add_argument("--max-wait-seconds", type=float, default=21600)
-    processing = commands.add_parser(
-        "process-video-pilot",
-        help="Scan bounded calibrated windows and export Silver shot candidates",
-    )
-    processing.add_argument("--source", type=Path, required=True)
-    processing.add_argument("--output", type=Path, required=True)
-    processing.add_argument(
-        "--videos", nargs="+", default=["match12.mp4", "match13.mp4", "match29.mp4"]
-    )
-    processing.add_argument("--duration", type=float, default=600)
-    processing.add_argument("--start-fraction", type=float, default=0.05)
-    processing.add_argument("--sample-hz", type=float, default=5)
-    processing.add_argument("--max-candidates", type=int, default=12)
-    processing_audit = commands.add_parser(
-        "audit-video-pilot", help="Validate candidate exports and keep unresolved quality flags"
-    )
-    processing_audit.add_argument("--output", type=Path, required=True)
-    collection = commands.add_parser(
-        "collect-video-corpus",
-        help="Collect full recordings into resumable BEV observation episodes",
-    )
-    collection.add_argument("--source", type=Path, required=True)
-    collection.add_argument("--output", type=Path, required=True)
-    collection.add_argument("--workers", type=int, default=4)
-    collection.add_argument("--sample-hz", type=float, default=5)
-    collection.add_argument("--limit-jobs", type=int)
-    recovery = commands.add_parser(
-        "recover-video-corpus", help="Retry failed windows without modifying the frozen parent run"
-    )
-    recovery.add_argument("--source", type=Path, required=True)
-    recovery.add_argument("--parent", type=Path, required=True)
-    recovery.add_argument("--output", type=Path, required=True)
-    recovery.add_argument("--workers", type=int, default=4)
-    author = commands.add_parser(
-        "process-author-dataset", help="Process uploaded source clips into the common BEV schema"
-    )
-    author.add_argument("--source", type=Path, required=True)
-    author.add_argument("--output", type=Path, required=True)
-    author.add_argument("--wait-ready-seconds", type=float, default=0)
-    screen = commands.add_parser(
-        "screen-real-corpus", help="Automatically triage complete raw episodes without claiming GT"
-    )
-    screen.add_argument("--source", type=Path, required=True)
-    screen.add_argument("--output", type=Path, required=True)
-    screen.add_argument("--workers", type=int, default=4)
-    uploaded_inventory = commands.add_parser(
-        "inventory-author-uploads", help="Snapshot stable direct uploads without waiting for a ZIP"
-    )
-    uploaded_inventory.add_argument("--source", type=Path, required=True)
-    uploaded_inventory.add_argument("--output", type=Path, required=True)
-    uploaded_inventory.add_argument("--stable-seconds", type=float, default=120)
-    uploaded_inventory.add_argument("--observe-seconds", type=float, default=2)
-    uploaded_inventory.add_argument("--games", nargs="+", choices=["snooker", "blackball", "carom"])
-    uploaded_inventory.add_argument("--hash-cache", type=Path)
-    uploaded_inventory.add_argument("--essential-only", action="store_true")
-    uploaded_pilot = commands.add_parser(
-        "convert-author-upload-pilot",
-        help="Convert stable source captures with explicit game labels",
-    )
-    uploaded_pilot.add_argument("--inventory", type=Path, required=True)
-    uploaded_pilot.add_argument("--output", type=Path, required=True)
-    uploaded_pilot.add_argument("--game", choices=["snooker", "blackball"], required=True)
-    uploaded_pilot.add_argument("--limit", type=int, default=5)
-    author_sync = commands.add_parser(
-        "sync-snooker-uploads",
-        help="Incrementally convert unique stable snooker captures and audit native manual paths",
-    )
-    author_sync.add_argument("--inventory", type=Path, required=True)
-    author_sync.add_argument("--output", type=Path, required=True)
-    author_sync.add_argument("--max-new-clips", type=int, default=20)
-    author_sync.add_argument("--hash-cache", type=Path)
-    catalog = commands.add_parser(
-        "build-research-catalog",
-        help="Index real and simulated sources with honest label boundaries",
-    )
-    catalog.add_argument("--author", type=Path, required=True)
-    catalog.add_argument("--author-inventory", type=Path, required=True)
-    catalog.add_argument("--matches", type=Path, required=True)
-    catalog.add_argument("--match-screening", type=Path, required=True)
-    catalog.add_argument("--synthetic", type=Path, required=True)
-    catalog.add_argument("--output", type=Path, required=True)
     study_dry = commands.add_parser(
         "study-dry-run", help="Validate paired study plumbing with a mock, not model inference"
     )
     study_dry.add_argument("--input", type=Path, required=True)
     study_dry.add_argument("--output", type=Path, required=True)
-    baseline_dry = commands.add_parser(
-        "baseline-dry-run",
-        help="Validate classical search and forecast metrics on one development fixture",
+    training_set = commands.add_parser(
+        "prepare-training-set",
+        help="Fresh post-training layouts disjoint from development and formal-test groups (CPU)",
     )
-    baseline_dry.add_argument("--input", type=Path, required=True)
-    baseline_dry.add_argument("--output", type=Path, required=True)
-    baseline_dry.add_argument("--objective-budget", type=int, default=8)
-    baseline_dry.add_argument("--candidates", type=int, default=4)
-    baseline_dry.add_argument("--seed", type=int, default=20261013)
-    baseline_dry.add_argument("--limit-jobs", type=int)
-    canvas_audit = commands.add_parser(
-        "audit-author-canvases",
-        help="Audit at most 16 native source canvases using two sampled frames per recording",
+    training_set.add_argument("--output", type=Path, required=True)
+    training_set.add_argument("--seed", type=int, default=20261103)
+    training_set.add_argument("--per-family", type=int, default=1000)
+    training_set.add_argument("--max-index", type=int, default=200_000)
+    training_set.add_argument("--exclude-records", type=Path, nargs="*", default=[])
+    training_set.add_argument("--exclude-formal-panel", type=Path, nargs="*", default=[])
+    verify_external = commands.add_parser(
+        "verify-external-suites", help="Verify pinned external assets without network/model calls"
     )
-    canvas_audit.add_argument("--episodes", type=Path, required=True)
-    canvas_audit.add_argument("--inventory", type=Path, required=True)
-    canvas_audit.add_argument("--output", type=Path, required=True)
-    canvas_audit.add_argument("--limit-recordings", type=int, default=16)
-    point_audit = commands.add_parser(
-        "audit-native-point-compatibility",
-        help="Check sampled detections against held-out native paths without refitting the mapping",
+    verify_external.add_argument("--output", type=Path)
+    vlm_suite = commands.add_parser(
+        "prepare-vlm-suite", help="Generate and independently replay all three InverseR-VLM splits"
     )
-    point_audit.add_argument("--mapping", type=Path, required=True)
-    point_audit.add_argument("--episodes", type=Path, required=True)
-    point_audit.add_argument("--output", type=Path, required=True)
-    semantic_qc = commands.add_parser(
-        "run-author-semantic-qc",
-        help="Compare five fixed CPU-only pipeline profiles on at most 16 author recordings",
+    vlm_suite.add_argument("--output-root", type=Path, default=Path("data/research"))
+    vlm_suite.add_argument(
+        "--exclude-pilot", type=Path, default=Path("data/pilot-v0/privileged.jsonl")
     )
-    semantic_qc.add_argument("--mapping", type=Path, required=True)
-    semantic_qc.add_argument("--episodes", type=Path, required=True)
-    semantic_qc.add_argument("--output", type=Path, required=True)
-    semantic_qc.add_argument("--workers", type=int, default=4)
-    semantic_qc.add_argument("--max-new-output-gb", type=float, default=20)
-    semantic_qc.add_argument("--limit-recordings", type=int)
-    semantic_qc.add_argument(
-        "--profile-suite",
-        choices=["initial_ablation", "cue_gap_no_background"],
-        default="initial_ablation",
+    vlm_suite.add_argument(
+        "--exclude-formal", type=Path, default=Path("data/research/formal-test-v1")
     )
-    analytics_audit = commands.add_parser(
-        "audit-billiards-analytics",
-        help="Audit acquired nine-ball layouts/trajectories without assuming cue or spin GT",
+    vlm_suite.add_argument("--verify-only", action="store_true")
+    vlm_eval = commands.add_parser(
+        "run-vlm-eval", help="Ledgered local VLM evaluation on train or valid, never blind test"
     )
-    analytics_audit.add_argument("--dataset", type=Path, required=True)
-    analytics_audit.add_argument("--trajectories", type=Path)
-    analytics_audit.add_argument("--output", type=Path, required=True)
-    real_forecast = commands.add_parser(
-        "prepare-real-world-model-pilot",
-        help="Export source-annotated factual-prefix forecasts, not real action interventions",
+    vlm_eval.add_argument("--split", type=Path, required=True)
+    vlm_eval.add_argument("--output", type=Path, required=True)
+    vlm_eval.add_argument("--local-vllm-url", required=True)
+    vlm_eval.add_argument("--model", required=True)
+    vlm_eval.add_argument("--revision", required=True)
+    vlm_eval.add_argument("--tasks", choices=["forward", "T4", "T5"], nargs="+", required=True)
+    vlm_eval.add_argument("--thinking", action="store_true")
+    vlm_eval.add_argument("--thinking-token-budget", type=int)
+    vlm_eval.add_argument("--max-output-tokens", type=int)
+    vlm_eval.add_argument("--workers", type=int, default=1)
+    vlm_eval.add_argument("--count", type=int)
+    vlm_eval.add_argument("--max-total-tokens", type=int, required=True)
+    vlm_eval.add_argument("--execute", action="store_true")
+    vlm_eval.add_argument("--blind-protocol", type=Path)
+    vlm_eval.add_argument("--arm")
+    vlm_eval.add_argument("--seed", type=int, default=0)
+    freeze_blind = commands.add_parser(
+        "freeze-vlm-blind-protocol", help="Pin verified dataset, checkpoint and selection hashes"
     )
-    real_forecast.add_argument("--trajectories", type=Path, required=True)
-    real_forecast.add_argument("--output", type=Path, required=True)
-    diagnostic_panel = commands.add_parser(
-        "prepare-diagnostic-panel",
-        help="Lock a small 64+64 development panel without model inference or formal-test claims",
+    freeze_blind.add_argument("--test-manifest", type=Path, required=True)
+    freeze_blind.add_argument("--valid-manifest", type=Path, required=True)
+    freeze_blind.add_argument("--arms", type=Path, required=True)
+    freeze_blind.add_argument("--output", type=Path, required=True)
+    selection = commands.add_parser(
+        "select-capo-checkpoint", help="Pick a checkpoint from complete and matched valid runs"
     )
-    diagnostic_panel.add_argument("--synthetic", type=Path, required=True)
-    diagnostic_panel.add_argument("--real-public", type=Path, required=True)
-    diagnostic_panel.add_argument("--real-private", type=Path, required=True)
-    diagnostic_panel.add_argument("--output", type=Path, required=True)
-    diagnostic_panel.add_argument("--seed", type=int, default=20261014)
-    diagnostic_panel.add_argument("--synthetic-layouts", type=int, default=64)
-    azure_pilot = commands.add_parser(
-        "azure-panel-pilot", help="Run a bounded synthetic-only paired Azure GPT-5 pilot"
+    selection.add_argument("--valid-manifest", type=Path, required=True)
+    selection.add_argument(
+        "--candidate",
+        nargs=2,
+        action="append",
+        required=True,
+        metavar=("CHECKPOINT_MANIFEST", "RUN"),
     )
-    azure_pilot.add_argument("--panel", type=Path, required=True)
-    azure_pilot.add_argument("--azure-config", type=Path, required=True)
-    azure_pilot.add_argument("--output", type=Path, required=True)
-    azure_pilot.add_argument("--endpoint-index", type=int, default=4)
-    azure_pilot.add_argument("--layouts", type=int, default=2)
-    azure_pilot.add_argument("--design", choices=["paired", "goal_structured"], default="paired")
-    azure_pilot.add_argument("--max-requests", type=int, default=24)
-    azure_pilot.add_argument("--max-total-tokens", type=int, default=300000)
-    azure_pilot.add_argument("--max-output-tokens", type=int, default=4096)
-    azure_pilot.add_argument(
-        "--reasoning-effort", choices=["minimal", "low", "medium", "high"], default="minimal"
+    selection.add_argument("--output", type=Path, required=True)
+    export_adapter = commands.add_parser(
+        "export-capo-fsdp-adapter", help="Export all verified LoRA tensors from a collective save"
     )
-    azure_pilot.add_argument("--limit-jobs", type=int)
-    azure_pilot.add_argument("--execute", action="store_true")
-    planning_pilot = commands.add_parser(
-        "run-planning-pilot", help="Compare bounded classical search and cached model warm starts"
+    export_adapter.add_argument("--checkpoint", type=Path, required=True)
+    export_adapter.add_argument("--initial-adapter", type=Path, required=True)
+    export_adapter.add_argument("--output", type=Path, required=True)
+    merge_command = commands.add_parser(
+        "merge-capo-adapter", help="Merge a complete local LoRA adapter into a hashed bf16 model"
     )
-    planning_pilot.add_argument("--panel", type=Path, required=True)
-    planning_pilot.add_argument("--native-run", type=Path, required=True)
-    planning_pilot.add_argument("--output", type=Path, required=True)
-    planning_pilot.add_argument("--layouts", type=int, default=32)
-    planning_pilot.add_argument("--workers", type=int, default=4)
-    planning_pilot.add_argument("--seed", type=int, default=20261017)
-    planning_pilot.add_argument("--limit-cases", type=int)
-    native_probe = commands.add_parser(
-        "native-probe",
-        help="B0 reasoning-effort probe or B1 forward/intervention run; plan-only by default",
+    merge_command.add_argument("--model-path", type=Path, required=True)
+    merge_command.add_argument("--adapter", type=Path, required=True)
+    merge_command.add_argument("--output", type=Path, required=True)
+    merge_command.add_argument("--device", choices=("cpu", "cuda"), default="cuda")
+    agentic = commands.add_parser(
+        "run-agentic-baseline", help="Run a matched-budget CueTip or DeepPHY-WM adaptation"
     )
-    native_probe.add_argument("--panel", type=Path, required=True)
-    native_probe.add_argument(
-        "--design", choices=["effort_probe", "forward_intervention"], default="effort_probe"
+    agentic.add_argument("--split", type=Path, required=True)
+    agentic.add_argument("--output", type=Path, required=True)
+    agentic.add_argument("--local-vllm-url", required=True)
+    agentic.add_argument("--model", required=True)
+    agentic.add_argument("--revision", required=True)
+    agentic.add_argument(
+        "--method", choices=("cuetip", "wm_reflection", "self_verify"), required=True
     )
-    native_probe.add_argument("--layouts", type=int, default=8)
-    native_probe.add_argument("--efforts", nargs="+", choices=EFFORTS, default=EFFORTS)
-    native_probe.add_argument("--limit-jobs", type=int)
-    _study_api_arguments(
-        native_probe, requests=192, tokens=2_000_000, output=32768, reservation=40960
+    agentic.add_argument("--thinking", action="store_true")
+    agentic.add_argument("--thinking-token-budget", type=int)
+    agentic.add_argument("--max-output-tokens", type=int)
+    agentic.add_argument("--workers", type=int, default=1)
+    agentic.add_argument("--count", type=int)
+    agentic.add_argument("--max-total-tokens", type=int, required=True)
+    agentic.add_argument("--execute", action="store_true")
+    capo_sft = commands.add_parser(
+        "train-capo-sft", help="Run the multimodal SFT baseline or two-step smoke on CUDA"
     )
-    bank_panel = commands.add_parser(
-        "prepare-bank-panel", help="Freeze the B2 common candidate bank without model inference"
+    capo_sft.add_argument("--split", type=Path, required=True)
+    capo_sft.add_argument("--output", type=Path, required=True)
+    capo_sft.add_argument("--model-path", type=Path, required=True)
+    capo_sft.add_argument("--steps", type=int, required=True)
+    capo_sft.add_argument("--count", type=int)
+    capo_sft.add_argument("--seed", type=int, default=20261119)
+    grpo = commands.add_parser(
+        "train-capo-grpo", help="Multimodal GRPO arms or FSDP joint curriculum on CUDA"
     )
-    bank_panel.add_argument("--source-panel", type=Path, required=True)
-    bank_panel.add_argument("--output", type=Path, required=True)
-    bank_panel.add_argument("--layouts", type=int, default=64)
-    bank_panel.add_argument("--candidates", type=int, default=8)
-    bank_panel.add_argument("--bev-layouts", type=int, default=16)
-    bank_panel.add_argument("--seed", type=int, default=20261019)
-    bank_study = commands.add_parser(
-        "bank-study", help="B2 blind bank forecasts and direct selection; plans only by default"
+    grpo.add_argument("--split", type=Path, required=True)
+    grpo.add_argument("--model-path", type=Path, required=True)
+    grpo.add_argument("--adapter", type=Path, required=True)
+    grpo.add_argument("--output", type=Path, required=True)
+    grpo.add_argument("--mode", choices=("capo", "outcome", "uncoupled"), required=True)
+    grpo.add_argument("--task", choices=("forward", "T4", "T5", "joint"), required=True)
+    grpo.add_argument("--stage", type=int, choices=(1, 2, 3), default=3)
+    grpo.add_argument("--steps", type=int, required=True)
+    grpo.add_argument("--stage-steps", nargs=3, type=int)
+    grpo.add_argument("--seed", type=int, default=20261119)
+    grpo.add_argument("--count", type=int)
+    grpo.add_argument("--vllm-server-url")
+    grpo.add_argument("--fsdp", action="store_true", help="Use two torchrun FSDP2 trainer ranks")
+    grpo.add_argument("--resume-from", type=Path, help="Recover an exact completed FSDP stage")
+    wm = commands.add_parser(
+        "train-learned-wm", help="Fit a GPU world-model baseline and score CEM on valid"
     )
-    bank_study.add_argument("--bank-panel", type=Path, required=True)
-    bank_study.add_argument("--reasoning-effort", choices=EFFORTS, required=True)
-    bank_study.add_argument("--limit-jobs", type=int)
-    _study_api_arguments(
-        bank_study, requests=1440, tokens=20_000_000, output=4096, reservation=16384
+    wm.add_argument("--method", choices=("dino", "state"), required=True)
+    wm.add_argument("--train", type=Path, default=Path("data/research/inverser-vlm-v1/train"))
+    wm.add_argument("--valid", type=Path, default=Path("data/research/inverser-vlm-v1/valid"))
+    wm.add_argument("--dino-path", type=Path, default=Path("models/dinov2-small"))
+    wm.add_argument("--output", type=Path, required=True)
+    wm.add_argument("--epochs", type=int, required=True)
+    wm.add_argument("--seed", type=int, default=20261119)
+    wm.add_argument("--count", type=int)
+    wm.add_argument("--valid-count", type=int)
+    public_eval = commands.add_parser(
+        "run-public-eval", help="Ledgered local PhysBench or DeepPHY puzzle evaluation"
     )
-    feedback_study = commands.add_parser(
-        "feedback-study",
-        help="C genuine/shuffled/no-evidence feedback episodes; plans only by default",
+    public_eval.add_argument(
+        "--suite",
+        choices=("physbench", "iphyre", "phyre", "pooltool", "MMMU", "RealWorldQA"),
+        default="physbench",
     )
-    cases = feedback_study.add_mutually_exclusive_group(required=True)
-    cases.add_argument("--panel", type=Path, help="development panel; needs --native-run")
-    cases.add_argument("--formal-panel", type=Path, help="frozen formal test panel")
-    feedback_study.add_argument("--native-run", type=Path)
-    feedback_study.add_argument("--models", nargs="+", default=["gpt-5-mini", "gpt-5"])
-    feedback_study.add_argument("--reasoning-effort", choices=["none", *EFFORTS], required=True)
-    feedback_study.add_argument("--layouts", type=int, default=32)
-    feedback_study.add_argument("--max-attempts", type=int, default=8)
-    feedback_study.add_argument("--limit-episodes", type=int)
-    feedback_study.add_argument("--min-request-interval-s", type=float, default=0.0)
-    _study_api_arguments(
-        feedback_study, requests=1408, tokens=20_000_000, output=4096, reservation=16384
+    public_eval.add_argument("--source", type=Path, default=Path("data/external/PhysBench"))
+    public_eval.add_argument("--output", type=Path, required=True)
+    public_eval.add_argument("--local-vllm-url", required=True)
+    public_eval.add_argument("--model", required=True)
+    public_eval.add_argument("--revision", required=True)
+    public_eval.add_argument("--split", choices=["val", "test"], default="val")
+    public_eval.add_argument("--collision-only", action="store_true")
+    public_eval.add_argument("--thinking", action="store_true")
+    public_eval.add_argument("--count", type=int)
+    public_eval.add_argument("--max-total-tokens", type=int, required=True)
+    public_eval.add_argument("--execute", action="store_true")
+    capo_analysis = commands.add_parser(
+        "analyze-capo-runs", help="Rescore completed CAPO evaluation envelopes without any calls"
     )
-    formal_test = commands.add_parser(
-        "prepare-formal-test",
-        help="Freeze a fresh held-out formal test panel from new seeds (CPU only, no model calls)",
+    capo_analysis.add_argument(
+        "--run", nargs=2, action="append", required=True, metavar=("NAME", "DIRECTORY")
     )
-    formal_test.add_argument("--dev-source", type=Path, required=True)
-    formal_test.add_argument("--output", type=Path, required=True)
-    formal_test.add_argument("--seed", type=int, default=20261021)
-    formal_test.add_argument("--per-family", type=int, default=50)
-    formal_test.add_argument("--bev-per-family", type=int, default=12)
-    formal_test.add_argument("--feedback-per-family", type=int, default=16)
-    formal_test.add_argument("--candidates", type=int, default=8)
-    formal_suite = commands.add_parser(
-        "formal-suite",
-        help="Forward, direct-goal and bank requests on the frozen formal test; plans by default",
+    capo_analysis.add_argument("--output", type=Path, required=True)
+    wandb_sync = commands.add_parser(
+        "sync-wandb", help="Upload completed SFT, CAPO/GRPO, or evaluation artifacts to W&B"
     )
-    formal_suite.add_argument("--formal-panel", type=Path, required=True)
-    formal_suite.add_argument("--models", nargs="+", required=True)
-    formal_suite.add_argument("--reasoning-effort", choices=["none", *EFFORTS], required=True)
-    formal_suite.add_argument(
-        "--suites",
-        nargs="+",
-        choices=["forward", "goal", "bank"],
-        default=["forward", "goal", "bank"],
-    )
-    formal_suite.add_argument("--no-bev", action="store_true")
-    formal_suite.add_argument("--limit-jobs", type=int)
-    _study_api_arguments(formal_suite, requests=1, tokens=1, output=32768, reservation=40960)
-    formal_summary = commands.add_parser(
-        "formal-summary", help="Re-score finished formal suite runs with the current scoring code"
-    )
-    formal_summary.add_argument("--formal-panel", type=Path, required=True)
-    formal_summary.add_argument("--runs", type=Path, nargs="+", required=True)
-    formal_summary.add_argument("--output", type=Path, required=True)
-    formal_classical = commands.add_parser(
-        "formal-classical", help="Classical geometry/search baselines on the frozen formal test"
-    )
-    formal_classical.add_argument("--formal-panel", type=Path, required=True)
-    formal_classical.add_argument("--output", type=Path, required=True)
-    formal_classical.add_argument("--workers", type=int, default=4)
-    start_order = commands.add_parser(
-        "start-order-ablation",
-        help="Experiment A: start order versus start quality on the planning pilot cases (CPU)",
-    )
-    start_order.add_argument("--panel", type=Path, required=True)
-    start_order.add_argument("--native-run", type=Path, required=True)
-    start_order.add_argument("--reference", type=Path, required=True)
-    start_order.add_argument("--output", type=Path, required=True)
-    start_order.add_argument("--workers", type=int, default=4)
+    wandb_sync.add_argument("--run-dir", type=Path, required=True)
+    wandb_sync.add_argument("--split", type=Path)
+    wandb_sync.add_argument("--name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
     if args.command in ("generate-pilot", "audit-pilot"):
@@ -361,415 +200,235 @@ def main() -> int:
         from inverser.pilot import audit_pilot
 
         result = audit_pilot(args.output, replay_count=args.replay_count)
-    elif args.command == "acquire-source-pilot":
-        from inverser.sources import acquire_source_pilot
-
-        result = acquire_source_pilot(args.registry, args.output)
-    elif args.command == "source-catalog":
-        from inverser.sources import load_sources
-
-        result = {
-            "sources": [source.model_dump(mode="json") for source in load_sources(args.registry)]
-        }
-    elif args.command == "download-hf-source":
-        from inverser.hf_download import download_hf_source
-
-        result = download_hf_source(args.registry, args.output, max_workers=args.max_workers)
-    elif args.command == "wait-import-archive":
-        from inverser.archive import wait_for_upload
-
-        result = wait_for_upload(
-            args.archive,
-            args.output,
-            stable_seconds=args.stable_seconds,
-            max_wait_seconds=args.max_wait_seconds,
-        )
-    elif args.command == "process-video-pilot":
-        from inverser.processing import process_video_pilot
-
-        result = process_video_pilot(
-            args.source,
-            args.output,
-            args.videos,
-            duration_s=args.duration,
-            start_fraction=args.start_fraction,
-            sample_hz=args.sample_hz,
-            max_candidates=args.max_candidates,
-        )
-    elif args.command == "audit-video-pilot":
-        from inverser.processing_audit import audit_processing, render_processing_overview
-
-        result = audit_processing(args.output)
-        if result["candidate_clips"]:
-            render_processing_overview(args.output)
-    elif args.command == "collect-video-corpus":
-        from inverser.collection import collect_corpus
-
-        result = collect_corpus(
-            args.source,
-            args.output,
-            workers=args.workers,
-            sample_hz=args.sample_hz,
-            limit_jobs=args.limit_jobs,
-        )
-    elif args.command == "recover-video-corpus":
-        from inverser.collection import recover_failed_corpus
-
-        result = recover_failed_corpus(args.source, args.parent, args.output, workers=args.workers)
-    elif args.command == "process-author-dataset":
-        from inverser.author_data import process_author_dataset
-
-        result = process_author_dataset(
-            args.source, args.output, wait_ready_seconds=args.wait_ready_seconds
-        )
-    elif args.command == "screen-real-corpus":
-        from inverser.quality_screening import screen_corpus, screening_gallery
-
-        result = screen_corpus(args.source, args.output, workers=args.workers)
-        screening_gallery(args.output)
-    elif args.command == "inventory-author-uploads":
-        from inverser.author_uploads import snapshot_uploads
-
-        result = snapshot_uploads(
-            args.source,
-            args.output,
-            stable_seconds=args.stable_seconds,
-            observe_seconds=args.observe_seconds,
-            games=tuple(args.games) if args.games else None,
-            hash_cache=args.hash_cache,
-            essential_only=args.essential_only,
-        )
-    elif args.command == "convert-author-upload-pilot":
-        from inverser.author_uploads import convert_upload_pilot
-
-        result = convert_upload_pilot(args.inventory, args.output, game=args.game, limit=args.limit)
-    elif args.command == "sync-snooker-uploads":
-        from inverser.author_sync import sync_snooker_uploads
-
-        result = sync_snooker_uploads(
-            args.inventory,
-            args.output,
-            max_new_clips=args.max_new_clips,
-            hash_cache=args.hash_cache,
-        )
-    elif args.command == "build-research-catalog":
-        from inverser.corpus_catalog import build_corpus_catalog
-
-        result = build_corpus_catalog(
-            args.author,
-            args.author_inventory,
-            args.matches,
-            args.match_screening,
-            args.synthetic,
-            args.output,
-        )
     elif args.command == "study-dry-run":
         from inverser.evaluation import study_dry_run
 
         result = study_dry_run(args.input, args.output)
-    elif args.command == "baseline-dry-run":
-        from inverser.study_runner import EngineeringRunConfig, baseline_dry_run
+    elif args.command == "prepare-training-set":
+        from inverser.training_env import TrainingSetConfig, prepare_training_set
 
-        result = baseline_dry_run(
-            args.input,
+        result = prepare_training_set(
             args.output,
-            EngineeringRunConfig(
-                seed=args.seed,
-                objective_budget=args.objective_budget,
-                candidate_count=args.candidates,
-            ),
-            limit_jobs=args.limit_jobs,
+            TrainingSetConfig(seed=args.seed, per_family=args.per_family, max_index=args.max_index),
+            exclude_records=tuple(args.exclude_records),
+            exclude_panels=tuple(args.exclude_formal_panel),
         )
-    elif args.command == "audit-author-canvases":
-        import cv2
+    elif args.command == "analyze-capo-runs":
+        from inverser.paper_analysis import analyze_runs
 
-        from inverser.canvas_audit import audit_author_canvases
+        runs = {name: Path(path) for name, path in args.run}
+        if len(runs) != len(args.run):
+            parser.error("analysis run names must be distinct")
+        result = analyze_runs(runs, args.output)
+    elif args.command == "sync-wandb":
+        from inverser.wandb_tracker import sync_run_to_wandb
 
-        cv2.setNumThreads(1)
-        report = audit_author_canvases(
-            args.episodes,
-            args.inventory,
-            args.output,
-            limit_recordings=args.limit_recordings,
-        )
-        result = report.model_dump(mode="json", exclude={"recordings"})
-    elif args.command == "audit-native-point-compatibility":
-        import cv2
+        result = sync_run_to_wandb(args.run_dir, split_dir=args.split, run_name=args.name)
+    elif args.command == "run-public-eval":
+        from inverser.public_eval import run_physbench
+        from inverser.study_calls import local_vllm_backends
 
-        from inverser.canvas_audit import audit_registered_points
+        backend = local_vllm_backends(
+            args.local_vllm_url,
+            (args.model,),
+            model_revision=args.revision,
+            reasoning_effort="high" if args.thinking else "none",
+            max_output_tokens=2048,
+            request_token_reservation=16384,
+            timeout_s=180,
+            enable_thinking=args.thinking,
+            thinking_token_budget=1024 if args.thinking else None,
+        )[0]
+        if args.suite in ("MMMU", "RealWorldQA"):
+            from inverser.retention_eval import run_retention
 
-        cv2.setNumThreads(1)
-        point_report = audit_registered_points(args.mapping, args.episodes, args.output)
-        result = point_report.model_dump(mode="json", exclude={"rows"})
-    elif args.command == "run-author-semantic-qc":
-        from inverser.semantic_qc import SemanticQCConfig, run_semantic_qc
+            if args.collision_only or args.split != "val":
+                parser.error("--split and --collision-only only apply to PhysBench")
+            result = run_retention(
+                args.suite,
+                args.output,
+                backend,
+                count=args.count,
+                budget_tokens=args.max_total_tokens,
+                execute=args.execute,
+            )
+        elif args.suite != "physbench":
+            from inverser.iphyre_eval import run_iphyre
 
-        result = run_semantic_qc(
-            args.mapping,
-            args.episodes,
-            args.output,
-            SemanticQCConfig(
-                workers=args.workers,
-                max_new_output_bytes=int(args.max_new_output_gb * 1_000_000_000),
-                profile_suite=args.profile_suite,
-            ),
-            limit_recordings=args.limit_recordings,
-        )
-    elif args.command == "audit-billiards-analytics":
-        from inverser.analytics_data import audit_analytics_data
-
-        result = audit_analytics_data(args.dataset, args.output, args.trajectories)
-    elif args.command == "prepare-real-world-model-pilot":
-        from inverser.world_model_data import build_factual_forecast_pilot
-
-        result = build_factual_forecast_pilot(args.trajectories, args.output)
-    elif args.command == "prepare-diagnostic-panel":
-        from inverser.diagnostic_panel import DiagnosticPanelConfig, prepare_diagnostic_panel
-
-        result = prepare_diagnostic_panel(
-            args.synthetic,
-            args.real_public,
-            args.real_private,
-            args.output,
-            DiagnosticPanelConfig(
-                schema_version="development-evaluation-panel-v1"
-                if args.synthetic_layouts > 64
-                else "development-diagnostic-panel-v1",
-                synthetic_layouts=args.synthetic_layouts,
-                seed=args.seed,
-            ),
-        )
-    elif args.command == "azure-panel-pilot":
-        from inverser.azure_study import AzurePilotConfig, run_azure_panel
-
-        config = AzurePilotConfig(
-            design=args.design,
-            layouts=args.layouts,
-            max_model_requests=args.max_requests,
-            max_total_tokens=args.max_total_tokens,
-            max_output_tokens=args.max_output_tokens,
-            reasoning_effort=args.reasoning_effort,
-        )
-        if args.execute:
-            from azure.identity import DefaultAzureCredential, get_bearer_token_provider
-
-            logging.getLogger("azure").setLevel(logging.WARNING)
-            logging.getLogger("httpx").setLevel(logging.WARNING)
-            with DefaultAzureCredential(exclude_interactive_browser_credential=True) as credential:
-                result = run_azure_panel(
-                    args.panel,
-                    args.azure_config,
-                    args.output,
-                    config,
-                    endpoint_index=args.endpoint_index,
-                    execute=True,
-                    token_provider=get_bearer_token_provider(
-                        credential, "https://cognitiveservices.azure.com/.default"
-                    ),
-                    limit_jobs=args.limit_jobs,
-                )
+            if args.collision_only or args.split != "val":
+                parser.error("--split and --collision-only only apply to PhysBench")
+            result = run_iphyre(
+                args.output,
+                backend,
+                count=args.count,
+                budget_tokens=args.max_total_tokens,
+                execute=args.execute,
+                suite=args.suite,
+            )
         else:
-            result = run_azure_panel(
-                args.panel,
-                args.azure_config,
+            result = run_physbench(
+                args.source,
                 args.output,
-                config,
-                endpoint_index=args.endpoint_index,
+                backend,
+                split=args.split,
+                collision_only=args.collision_only,
+                count=args.count,
+                budget_tokens=args.max_total_tokens,
+                execute=args.execute,
             )
-    elif args.command == "run-planning-pilot":
-        from inverser.planning_pilot import PlanningPilotConfig, run_planning_pilot
+    elif args.command == "train-learned-wm":
+        from inverser.learned_wm import train_world_model
 
-        planning_report = run_planning_pilot(
-            args.panel,
-            args.native_run,
+        result = train_world_model(
+            args.method,
+            args.train,
+            args.valid,
             args.output,
-            PlanningPilotConfig(layouts=args.layouts, workers=args.workers, seed=args.seed),
-            limit_cases=args.limit_cases,
+            args.dino_path,
+            epochs=args.epochs,
+            seed=args.seed,
+            limit=args.count,
+            valid_limit=args.valid_count,
         )
-        result = {
-            key: value
-            for key, value in planning_report.items()
-            if key not in ("by_method_budget_family", "paired_success_comparisons")
-        }
-        result["summary_file"] = str(args.output / "summary.json")
-    elif args.command == "native-probe":
-        from inverser.native_probe import NativeProbeConfig, run_native_probe
+    elif args.command == "train-capo-grpo":
+        from inverser.capo_grpo import run_grpo
 
-        probe_config = NativeProbeConfig(
-            design=args.design,
-            layouts=args.layouts,
-            reasoning_efforts=tuple(args.efforts),
-            max_model_requests=args.max_requests,
-            max_total_tokens=args.max_total_tokens,
-            max_output_tokens=args.max_output_tokens,
-            request_token_reservation=args.request_token_reservation,
-        )
-
-        def probe(token: Callable[[], str] | None) -> dict[str, object]:
-            return run_native_probe(
-                args.panel,
-                args.azure_config,
-                args.output,
-                probe_config,
-                endpoint_index=args.endpoint_index,
-                execute=token is not None,
-                token_provider=token,
-                limit_jobs=args.limit_jobs,
-            )
-
-        result = _study_result(_with_azure_token(probe) if args.execute else probe(None), args)
-    elif args.command == "prepare-bank-panel":
-        from inverser.bank_study import BankPanelConfig, prepare_bank_panel
-
-        result = prepare_bank_panel(
-            args.source_panel,
+        result = run_grpo(
+            args.split,
+            args.model_path,
+            args.adapter,
             args.output,
-            BankPanelConfig(
-                layouts=args.layouts,
-                candidates=args.candidates,
-                bev_layouts=args.bev_layouts,
-                seed=args.seed,
+            mode=args.mode,
+            task=args.task,
+            stage=args.stage,
+            steps=args.steps,
+            seed=args.seed,
+            count=args.count,
+            server_url=args.vllm_server_url,
+            stage_steps=tuple(args.stage_steps) if args.stage_steps else None,
+            fsdp=args.fsdp,
+            resume_from=args.resume_from,
+        )
+    elif args.command == "train-capo-sft":
+        from inverser.capo_trainer import run_sft
+
+        result = run_sft(
+            args.split,
+            args.model_path,
+            args.output,
+            count=args.count,
+            steps=args.steps,
+            seed=args.seed,
+        )
+    elif args.command == "run-agentic-baseline":
+        from inverser.agentic_baselines import run_agentic_baseline
+        from inverser.study_calls import local_vllm_backends
+
+        backend = local_vllm_backends(
+            args.local_vllm_url,
+            (args.model,),
+            model_revision=args.revision,
+            reasoning_effort="high" if args.thinking else "none",
+            max_output_tokens=args.max_output_tokens or (2048 if args.thinking else 1024),
+            request_token_reservation=16384,
+            timeout_s=150,
+            enable_thinking=args.thinking,
+            temperature=0.65 if args.method == "self_verify" else 0,
+            thinking_token_budget=(
+                args.thinking_token_budget
+                if args.thinking_token_budget is not None
+                else (1024 if args.thinking else None)
             ),
-        )
-    elif args.command == "bank-study":
-        from inverser.bank_study import BankStudyConfig, run_bank_study
-
-        bank_config = BankStudyConfig(
-            reasoning_effort=args.reasoning_effort,
-            max_model_requests=args.max_requests,
-            max_total_tokens=args.max_total_tokens,
-            max_output_tokens=args.max_output_tokens,
-            request_token_reservation=args.request_token_reservation,
-        )
-
-        def bank(token: Callable[[], str] | None) -> dict[str, object]:
-            return run_bank_study(
-                args.bank_panel,
-                args.azure_config,
-                args.output,
-                bank_config,
-                endpoint_index=args.endpoint_index,
-                execute=token is not None,
-                token_provider=token,
-                limit_jobs=args.limit_jobs,
-            )
-
-        result = _study_result(_with_azure_token(bank) if args.execute else bank(None), args)
-    elif args.command == "feedback-study":
-        from inverser.feedback_study import (
-            FeedbackStudyConfig,
-            development_feedback_cases,
-            run_feedback_study,
-        )
-
-        feedback_config = FeedbackStudyConfig(
-            models=tuple(args.models),
-            layouts=args.layouts,
-            max_attempts=args.max_attempts,
-            reasoning_effort=args.reasoning_effort,
-            max_model_requests=args.max_requests,
-            max_total_tokens=args.max_total_tokens,
-            max_output_tokens=args.max_output_tokens,
-            request_token_reservation=args.request_token_reservation,
-            min_request_interval_s=args.min_request_interval_s,
-        )
-        if args.formal_panel is not None:
-            from inverser.formal_suite import formal_feedback_cases
-
-            feedback_cases, case_source = formal_feedback_cases(args.formal_panel)
-        else:
-            if args.native_run is None:
-                parser.error("--panel requires --native-run")
-            feedback_cases, case_source = development_feedback_cases(
-                args.panel, args.native_run, feedback_config
-            )
-
-        def feedback(token: Callable[[], str] | None) -> dict[str, object]:
-            return run_feedback_study(
-                feedback_cases,
-                case_source,
-                args.azure_config,
-                args.output,
-                feedback_config,
-                endpoint_index=args.endpoint_index,
-                execute=token is not None,
-                token_provider=token,
-                limit_episodes=args.limit_episodes,
-            )
-
-        result = _study_result(
-            _with_azure_token(feedback) if args.execute else feedback(None), args
-        )
-    elif args.command == "prepare-formal-test":
-        from inverser.formal_panel import FormalTestConfig, prepare_formal_test
-
-        result = prepare_formal_test(
-            args.dev_source,
+        )[0]
+        result = run_agentic_baseline(
+            args.split,
             args.output,
-            FormalTestConfig(
-                seed=args.seed,
-                per_family=args.per_family,
-                bev_per_family=args.bev_per_family,
-                feedback_per_family=args.feedback_per_family,
-                candidates=args.candidates,
+            backend,
+            method=args.method,
+            count=args.count,
+            budget_tokens=args.max_total_tokens,
+            execute=args.execute,
+            workers=args.workers,
+        )
+    elif args.command == "merge-capo-adapter":
+        from inverser.capo_checkpoint import merge_adapter
+
+        result = merge_adapter(args.model_path, args.adapter, args.output, device=args.device)
+    elif args.command == "export-capo-fsdp-adapter":
+        from inverser.capo_checkpoint import export_fsdp_adapter
+
+        result = export_fsdp_adapter(args.checkpoint, args.initial_adapter, args.output)
+    elif args.command == "select-capo-checkpoint":
+        from inverser.capo_selection import select_checkpoint
+
+        candidates = {Path(checkpoint): Path(run) for checkpoint, run in args.candidate}
+        if len(candidates) != len(args.candidate):
+            parser.error("checkpoint candidates must be distinct")
+        result = select_checkpoint(args.output, args.valid_manifest, candidates)
+    elif args.command == "freeze-vlm-blind-protocol":
+        from inverser.blind_protocol import freeze_blind_protocol
+
+        result = freeze_blind_protocol(
+            args.output,
+            args.test_manifest,
+            args.valid_manifest,
+            args.arms,
+        ).model_dump(mode="json")
+    elif args.command == "run-vlm-eval":
+        from inverser.study_calls import local_vllm_backends
+        from inverser.vlm_eval import run_vlm_eval
+
+        backend = local_vllm_backends(
+            args.local_vllm_url,
+            (args.model,),
+            model_revision=args.revision,
+            reasoning_effort="high" if args.thinking else "none",
+            max_output_tokens=args.max_output_tokens or (2048 if args.thinking else 1024),
+            request_token_reservation=16384,
+            timeout_s=180,
+            enable_thinking=args.thinking,
+            thinking_token_budget=(
+                args.thinking_token_budget
+                if args.thinking_token_budget is not None
+                else (1024 if args.thinking else None)
             ),
-        )
-    elif args.command == "formal-suite":
-        from inverser.formal_suite import FormalSuiteConfig, run_formal_suite
-
-        suite_config = FormalSuiteConfig(
-            models=tuple(args.models),
-            reasoning_effort=args.reasoning_effort,
-            suites=tuple(args.suites),
-            include_bev=not args.no_bev,
-            max_model_requests=args.max_requests,
-            max_total_tokens=args.max_total_tokens,
-            max_output_tokens=args.max_output_tokens,
-            request_token_reservation=args.request_token_reservation,
-        )
-
-        def suite(token: Callable[[], str] | None) -> dict[str, object]:
-            return run_formal_suite(
-                args.formal_panel,
-                args.azure_config,
-                args.output,
-                suite_config,
-                endpoint_index=args.endpoint_index,
-                execute=token is not None,
-                token_provider=token,
-                limit_jobs=args.limit_jobs,
-            )
-
-        result = _study_result(_with_azure_token(suite) if args.execute else suite(None), args)
-    elif args.command == "formal-summary":
-        from inverser.formal_suite import rescore_formal_runs
-
-        rescore_formal_runs(args.formal_panel, tuple(args.runs), args.output)
-        result = {"runs": [run.name for run in args.runs], "summary_file": str(args.output)}
-    elif args.command == "formal-classical":
-        from inverser.formal_suite import FormalClassicalConfig, run_formal_classical
-
-        classical = run_formal_classical(
-            args.formal_panel, args.output, FormalClassicalConfig(workers=args.workers)
-        )
-        result = {key: value for key, value in classical.items() if not isinstance(value, list)}
-        result["summary_file"] = str(args.output / "summary.json")
-    elif args.command == "start-order-ablation":
-        from inverser.start_order import StartOrderConfig, run_start_order_ablation
-
-        ablation = run_start_order_ablation(
-            args.panel,
-            args.native_run,
-            args.reference,
+        )[0]
+        result = run_vlm_eval(
+            args.split,
             args.output,
-            StartOrderConfig(workers=args.workers),
+            backend,
+            tasks=tuple(args.tasks),
+            count=args.count,
+            budget_tokens=args.max_total_tokens,
+            execute=args.execute,
+            blind_protocol=args.blind_protocol,
+            arm=args.arm,
+            seed=args.seed,
+            workers=args.workers,
         )
-        result = {key: value for key, value in ablation.items() if not isinstance(value, list)}
-        result["summary_file"] = str(args.output / "summary.json")
+    elif args.command == "prepare-vlm-suite":
+        from inverser.vlm_suite import prepare_vlm_suite, verify_vlm_suite
+
+        operation = verify_vlm_suite if args.verify_only else prepare_vlm_suite
+        result = operation(args.output_root, args.exclude_pilot, args.exclude_formal)
+    elif args.command == "verify-external-suites":
+        from inverser.external_benchmarks import verify_external_suites
+        from inverser.runtime import write_json
+
+        result = verify_external_suites()
+        if args.output:
+            write_json(args.output, result)
     else:
         from inverser.preview import render_preview
 
         render_preview(args.input, args.output)
         result = {"preview": str(args.output)}
     print(json.dumps(result, indent=2, allow_nan=False))
+    if args.command == "verify-external-suites" and result.get("status") != "ready":
+        return 1
+    if (
+        args.command in ("run-vlm-eval", "run-public-eval", "run-agentic-baseline")
+        and result.get("status") == "stopped"
+    ):
+        return 1
     return 0

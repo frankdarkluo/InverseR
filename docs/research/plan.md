@@ -1,5 +1,11 @@
 # InverseR: evidence-driven physical prediction and goal-conditioned planning
 
+> 当前下一阶段以 [InverseR-VLM / CAPO 执行计划](capo_execution.md) 为准，
+> 研究者原文见 [capo_requested_plan.md](capo_requested_plan.md)。
+> 新请求仅针对 InverseR/，授权 GPU/API 路线，不开展 CPU-only classical sweeps；
+> 反代先只小规模试 GPT-5.6 系列，额度消耗大时可跳过。
+> 下文保留历史决策与证据；与新计划冲突的“训练/GPU 尚未授权”属于历史状态。
+
 ## Status and purpose
 
 Status: initial setup and raw-data engineering were approved and executed.
@@ -812,6 +818,24 @@ pre-implementation gap table below is historical; implemented surfaces are
 documented in [study preparation](../benchmark/study_preparation.md).
 
 ### 13.1 已确认范围与未确认资源
+
+#### Training route week 1 started (2026-11-03)
+
+研究者选定训练路线：把后训练阶梯（SFT → GRPO → 多轮 RL 环境）搬到能力链上，主攻 ICML 2027（截稿
+未公布，按上届推算 1 月下旬），IJCAI 2027（全文 1/11）为 benchmark 版本的备选。预注册的臂、假设、奖励
+与决策点见[训练路线协议](training_protocol.md)。本轮只做 CPU 工作，模型调用 0、训练 0：
+
+- 独立训练环境 `.venv-train`（torch 2.14.0、vLLM 0.33.0、TRL 1.17.1、PEFT 0.21.2，本包可导入）与基座
+  Qwen3.5-9B（commit `c2022362…`，19 GB）就绪。四张 A100 都有他人任务；训练与 T0 等研究者明确分配。
+- `prepare-training-set`：`training-set-v1`（种子 20261103，4,000 布局、每 family 1,000；4,107 次回放，
+  拒绝 107 次母球落袋）与 `training-holdout-v1`（种子 20261104，200 布局，另排除训练集）。与 2,000 条
+  开发记录和 200 个正式测试布局的重叠均为 0，各核查 20 个见证回放；耗时 38 s＋10 s，共 55 MB。
+- `training_env.GoalEnvironment`：提示与正式套件的直接出杆请求逐字相同（有测试守住）；奖励
+  r = 1[1r 达标] + max(0, 1 − loss/20)，非法输出与仿真失败为 0。
+- `formal-suite --local-vllm-url`：本地 vLLM 路线（JSON 模式、thinking 关、无凭据）。T0 的 Qwen3.5-9B
+  计划已锁在 `formal-suite-qwen35-9b-local-v1`（3,328 请求，run hash `f16ebc3f…`），等卡后先
+  `--limit-jobs 8` 冒烟。
+- 234 测试、Ruff、Mypy 通过；代码未提交。
 
 #### Step 2 model sweep completed
 
