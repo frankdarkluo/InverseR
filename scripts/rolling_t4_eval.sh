@@ -57,7 +57,8 @@ while [[ ! -e $out/STOP ]]; do
     for run in "$@"; do
         for ck in "$run"/checkpoint-* "$run"/checkpoint "$run"; do
             [[ -d $ck ]] || continue
-            [[ -f $ck/adapter_model.safetensors || ( $ck == "$run" && -f $ck/model.safetensors ) ]] || continue
+            [[ -f $ck/adapter_model.safetensors ]] \
+                || { [[ $ck == "$run" ]] && compgen -G "$ck/model*.safetensors" >/dev/null; } || continue
             # Skip files still being written or synced.
             [[ -z $(find "$ck" -maxdepth 1 -newermt '-3 minutes' -print -quit) ]] || continue
             grep -q -P "^$(basename "$run")\t$(basename "$ck")\t" "$out/rolling.tsv" && continue
