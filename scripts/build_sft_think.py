@@ -468,6 +468,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--count", type=int, help="first N scenes only (smoke runs)")
     parser.add_argument("--workers", type=int, default=24)
+    parser.add_argument(
+        "--keep-think", action="store_true", help="keep the template traces (matched control)"
+    )
     args = parser.parse_args()
     split, out = args.split, args.output
     rows = sft_examples(split, args.count)
@@ -475,14 +478,17 @@ def main() -> None:
         labels = [json.loads(line) for _, line in zip(range(len(rows) // 2), f)]
     assert len(rows) == 2 * len(labels)
     out.mkdir(parents=True)  # never overwrite an existing corpus
-    with ProcessPoolExecutor(args.workers, initializer=_init) as pool:
-        new = list(pool.map(traces, labels, chunksize=64))
+    new = None
+    if not args.keep_think:
+        with ProcessPoolExecutor(args.workers, initializer=_init) as pool:
+            new = list(pool.map(traces, labels, chunksize=64))
     public = (split / "public").resolve()
     with (out / "sft.jsonl").open("w") as f:
         for n, row in enumerate(rows):
-            old = row["completion"][0]["content"]
-            answer = old.split("\n</think>\n", 1)[1]
-            row["completion"][0]["content"] = f"<think>\n{new[n // 2][n % 2]}\n</think>\n{answer}"
+            if new is not None:
+                answer = row["completion"][0]["content"].split("\n</think>\n", 1)[1]
+                think = new[n // 2][n % 2]
+                row["completion"][0]["content"] = f"<think>\n{think}\n</think>\n{answer}"
             paths = []
             for path in row["image_paths"]:
                 rel = Path(path).resolve().relative_to(public)
@@ -501,7 +507,7 @@ def main() -> None:
     )
     # schema inverser-sft-v2 makes train-capo-sft read sft.jsonl with corpus-relative images.
     manifest = {
-        "dataset": "inverser-sft-think",
+        "dataset": "inverser-sft-template" if args.keep_think else "inverser-sft-think",
         "schema_version": "inverser-sft-v2",
         "split": "train",
         "source": {
