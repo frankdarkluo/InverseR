@@ -141,6 +141,7 @@ def main() -> int:
     capo_sft.add_argument("--count", type=int)
     capo_sft.add_argument("--seed", type=int, default=42)
     capo_sft.add_argument("--save-every", type=int, help="also save the adapter every N steps")
+    capo_sft.add_argument("--fsdp", action="store_true", help="shard the model with FSDP2 (27B)")
     grpo = commands.add_parser(
         "train-capo-grpo", help="Multimodal GRPO arms or FSDP joint curriculum on CUDA"
     )
@@ -360,6 +361,7 @@ def main() -> int:
             steps=args.steps,
             seed=args.seed,
             save_every=args.save_every,
+            fsdp=args.fsdp,
         )
     elif args.command == "run-agentic-baseline":
         from inverser.agentic_baselines import run_agentic_baseline

@@ -219,6 +219,7 @@ def run_sft(
     seed: int,
     effective_batch_size: int = 32,
     save_every: int | None = None,
+    fsdp: bool = False,
 ) -> dict[str, object]:
     # Keep optional GPU packages and CUDA initialization out of corpus and scoring commands.
     import torch
@@ -249,6 +250,8 @@ def run_sft(
         attn_implementation="sdpa",
     )
     backbone.config.use_cache = False
+    # The language model reads text_config; FSDP activation checkpointing would grow its KV cache.
+    backbone.config.text_config.use_cache = False
     policy = get_peft_model(
         backbone,
         LoraConfig(r=64, lora_alpha=128, target_modules=LORA_TARGETS, task_type="CAUSAL_LM"),
@@ -286,7 +289,7 @@ def run_sft(
         per_device_train_batch_size=per_device_bs,
         gradient_accumulation_steps=grad_accum,
         ddp_find_unused_parameters=False if world_size > 1 else None,
-        gradient_checkpointing=True,
+        gradient_checkpointing=not fsdp,
         gradient_checkpointing_kwargs={"use_reentrant": False},
         bf16=True,
         learning_rate=2e-5,
@@ -294,10 +297,19 @@ def run_sft(
         # Intermediate adapters (checkpoint-N) let validation track T4 during long SFT runs.
         save_strategy="steps" if save_every else "no",
         save_steps=save_every or 500,
-        save_only_model=True,
+        save_only_model=not fsdp,  # FSDP writes pytorch_model_fsdp.bin with the trainer state
         report_to=[],
         remove_unused_columns=False,
         disable_tqdm=True,
+        # Same FSDP2 sharding as train-capo-grpo --fsdp; needed once the base outgrows a GPU (27B).
+        fsdp=fsdp,  # type: ignore[arg-type]
+        fsdp_config={
+            "version": 2,
+            "activation_checkpointing": True,
+            "transformer_layer_cls_to_wrap": ["Qwen3_5DecoderLayer", "Qwen3_5VisionBlock"],
+        }
+        if fsdp
+        else None,
     )
     from inverser.wandb_tracker import (
         extract_dataset_metadata,
@@ -346,7 +358,23 @@ def run_sft(
         wandb_run,
         csv_path=(output / "metrics.csv") if distributed.is_main_process else None,
     )
-    trainer = Trainer(
+    initial = output / "initial_adapter"
+    if fsdp and distributed.is_main_process:
+        policy.save_pretrained(str(initial))  # reference key set for export_fsdp_adapter
+
+    class SFTTrainer(Trainer):
+        def _save_checkpoint(self, model, trial):
+            super()._save_checkpoint(model, trial)
+            if fsdp:
+                self.accelerator.wait_for_everyone()
+                if self.accelerator.is_main_process:
+                    from inverser.capo_checkpoint import export_fsdp_adapter
+
+                    checkpoint = output / f"checkpoint-{self.state.global_step}"
+                    export_fsdp_adapter(checkpoint, initial, checkpoint / "full_adapter")
+                self.accelerator.wait_for_everyone()
+
+    trainer = SFTTrainer(
         model=policy,
         args=settings,
         train_dataset=dataset,
@@ -381,8 +409,21 @@ def run_sft(
         )
     distributed.wait_for_everyone()
     result = trainer.train()
-    if distributed.is_main_process:
+    if fsdp:
+        from accelerate.utils.fsdp_utils import save_fsdp_model
+
+        final = output / "checkpoint"
+        trainer.save_model(str(final))
+        plugin = trainer.accelerator.state.fsdp_plugin
+        save_fsdp_model(plugin, trainer.accelerator, trainer.model, str(final), adapter_only=True)
+        distributed.wait_for_everyone()
+        if distributed.is_main_process:
+            from inverser.capo_checkpoint import export_fsdp_adapter
+
+            export_fsdp_adapter(final, initial, final / "full_adapter")
+    elif distributed.is_main_process:
         trainer.save_model(str(output / "checkpoint"))
+    if distributed.is_main_process:
         report: dict[str, object] = {
             "status": "complete",
             "steps": result.global_step,

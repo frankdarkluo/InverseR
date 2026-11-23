@@ -22,9 +22,11 @@ evaluate() {  # $1 run dir, $2 checkpoint dir (adapter or merged model)
     local run ck name merged eval_dir server
     run=$(basename "$1") ck=$(basename "$2") name="$run-$ck" eval_dir="data/research/${tag}val-$run-$ck"
     merged="data/research/.rolling-merged/$name"
-    if [[ -f $2/adapter_model.safetensors ]]; then
+    local adapter=$2
+    [[ -f $2/full_adapter/adapter_model.safetensors ]] && adapter=$2/full_adapter  # FSDP export
+    if [[ -f $adapter/adapter_model.safetensors ]]; then
         rm -rf "$merged"
-        if ! envs/main/bin/python -m inverser merge-capo-adapter --model-path "$base" --adapter "$2" \
+        if ! envs/main/bin/python -m inverser merge-capo-adapter --model-path "$base" --adapter "$adapter" \
             --output "$merged" --device cuda > "$out/$name.merge.log" 2>&1; then
             printf '%s\t%s\tmerge_failed\n' "$run" "$ck" >> "$tsv"; return 0
         fi
@@ -68,7 +70,7 @@ while [[ ! -e $out/STOP ]]; do
     for run in "$@"; do
         for ck in "$run"/checkpoint-* "$run"/checkpoint "$run"; do
             [[ -d $ck ]] || continue
-            [[ -f $ck/adapter_model.safetensors ]] \
+            [[ -f $ck/adapter_model.safetensors || -f $ck/full_adapter/adapter_model.safetensors ]] \
                 || { [[ $ck == "$run" ]] && compgen -G "$ck/model*.safetensors" >/dev/null; } || continue
             # Skip files still being written or synced.
             [[ -z $(find "$ck" -maxdepth 1 -newermt '-3 minutes' -print -quit) ]] || continue
