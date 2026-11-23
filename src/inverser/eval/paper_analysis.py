@@ -90,17 +90,38 @@ def summarize_rows(rows: list[dict[str, Any]]) -> dict[str, object]:
         }
 
     def attempts_curve(episodes: list[dict[str, Any]]) -> dict[str, object]:
+        # v1 rows predate the recorded cap and always allowed six attempts.
+        turns = max((row.get("max_attempts", 6) for row in episodes), default=6)
         return {
             str(turn): _conditional(
                 [any(item["success"] for item in row["attempts"][:turn]) for row in episodes]
             )
-            for turn in range(1, 7)
+            for turn in range(1, turns + 1)
+        }
+
+    def forecasts(task: str) -> dict[str, object]:
+        items = [item for row in goals if row["task"] == task for item in row.get("forecasts", ())]
+        scored = [item["event_agreement"] for item in items if item["event_agreement"] is not None]
+        return {
+            "coverage": _conditional([item["forecast_present"] for item in items]),
+            "event_agreement": {"n": len(scored), "rate": mean(scored) if scored else None},
         }
 
     feedback = [row for row in goals if row["task"] == "T5"]
+    single = [row for row in goals if row["task"] == "T4"]
     return {
         "forward": mechanisms,
-        "T4": _conditional([row["success"] for row in goals if row["task"] == "T4"]),
+        "T4": _conditional([row["success"] for row in single]),
+        "T4_beats_no_shot": _conditional(
+            [
+                row["attempts"][0]["loss_radii"] is not None
+                and row["attempts"][0]["loss_radii"] < row["baseline_radii"]
+                for row in single
+                if "baseline_radii" in row
+            ]
+        ),
+        "T4_forecast": forecasts("T4"),
+        "T5_forecast": forecasts("T5"),
         "T5_by_attempt": attempts_curve(feedback),
         "T5_by_regime_and_attempt": {
             "standard": attempts_curve([row for row in feedback if not row.get("ood")]),
@@ -253,8 +274,14 @@ def analyze_runs(runs: dict[str, Path], output: Path) -> dict[str, object]:
         writer.writerow(("arm", "metric", "n", "rate"))
         for name in names:
             stats: Any = summaries[name]
-            for metric in ("T4", "public_exact_answer", "public_episode_solved"):
+            for metric in ("T4", "T4_beats_no_shot", "public_exact_answer"):
                 writer.writerow((name, metric, stats[metric]["n"], stats[metric]["rate"]))
+            solved = stats["public_episode_solved"]
+            writer.writerow((name, "public_episode_solved", solved["n"], solved["rate"]))
+            for task in ("T4", "T5"):
+                for metric, values in stats[f"{task}_forecast"].items():
+                    row = (name, f"{task}/forecast_{metric}", values["n"], values["rate"])
+                    writer.writerow(row)
             for family, values in stats["forward"].items():
                 for metric, rate in values["mean"].items():
                     writer.writerow((name, f"{family}/{metric}", values["n"], rate))

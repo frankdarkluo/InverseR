@@ -8,6 +8,7 @@ from typing import Any
 
 from PIL import Image
 
+from inverser.model_adapters import CAUSAL_PROMPT as TAG_CAUSAL_PROMPT
 from inverser.runtime import file_sha256, write_json
 from inverser.schemas import CueAction, Layout
 from inverser.study_calls import create_artifact_dir, producer_hashes
@@ -19,13 +20,10 @@ from inverser.vlm_suite import (
     format_goal_answer,
 )
 
-LORA_TARGETS = r".*(language_model.*\.(q_proj|k_proj|v_proj|o_proj)|visual\.merger\.linear_fc[12])"
-TAG_CAUSAL_PROMPT = (
-    "In the reasoning segment, first identify ball positions, aiming geometry, and the likely "
-    "ordered contacts; then consider sliding, rolling, and any 3D tip-offset spin deflection; "
-    "finally use those physical laws to calibrate the numeric prediction or shot. Keep reasoning "
-    "within 1024 tokens inside <think>...</think>, then output only the requested "
-    "<answer>...</answer> block."
+# Top 6 of the 27 ViT blocks see patches before the 2x2 spatial merge (sub-patch ball centres).
+LORA_TARGETS = (
+    r".*(language_model.*\.(q_proj|k_proj|v_proj|o_proj)|visual\.merger\.linear_fc[12]"
+    r"|visual\.blocks\.2[1-6]\.(attn\.(qkv|proj)|mlp\.linear_fc[12]))"
 )
 
 
@@ -161,10 +159,11 @@ def sft_examples(
             for prompt, images, trace, answer in (
                 (forward.prompt(), (forward.image,), forward_trace, format_forward_answer(truth)),
                 (
-                    goal.prompt() + "\nImages: INITIAL, GOAL.",
+                    goal.prompt() + "\nThe images in order are INITIAL and GOAL.",
                     (goal.initial_image, goal.goal_image),
                     inverse_trace,
-                    format_goal_answer(action),
+                    # The shot plus the contacts it produces (the label truth is that rollout).
+                    format_goal_answer(action, forecast=truth),
                 ),
             ):
                 for name in images:
@@ -193,6 +192,23 @@ def sft_examples(
     return rows
 
 
+def _training_dataset(split: Path, count: int | None):
+    from datasets import Dataset
+
+    manifest = json.loads((split / "manifest.json").read_text())
+    if manifest.get("schema_version") != "inverser-sft-v2":
+        return Dataset.from_list(sft_examples(split, count))
+    payload = split / "sft.jsonl"
+    if manifest["split"] != "train" or (count is not None and count <= 0):
+        raise ValueError("SFT requires a train-only corpus and a positive sample limit")
+    if file_sha256(payload) != manifest["artifact_sha256"]["sft.jsonl"]:
+        raise ValueError("SFT corpus hash mismatch")
+    dataset = Dataset.from_json(str(payload), keep_in_memory=False)
+    if len(dataset) != manifest["sft_examples"]["total"]:
+        raise ValueError("SFT corpus size does not match the manifest")
+    return dataset if count is None else dataset.select(range(min(len(dataset), 2 * count)))
+
+
 def run_sft(
     split: Path,
     model: Path,
@@ -206,7 +222,6 @@ def run_sft(
     # Keep optional GPU packages and CUDA initialization out of corpus and scoring commands.
     import torch
     from accelerate import PartialState
-    from datasets import Dataset
     from peft import LoraConfig, get_peft_model
     from transformers import AutoModelForImageTextToText, AutoProcessor, Trainer, TrainingArguments
     from trl.trainer.sft_trainer import DataCollatorForVisionLanguageModeling
@@ -217,9 +232,10 @@ def run_sft(
         raise ValueError("SFT needs positive optimizer-step and batch-size budgets")
     distributed = PartialState()
     torch.manual_seed(seed)
-    rows = sft_examples(split, count)
+    with distributed.main_process_first():
+        dataset = _training_dataset(split, count)
     world_size = max(1, distributed.num_processes)
-    per_device_bs = 4 if len(rows) >= 4 * world_size else 1
+    per_device_bs = 4 if len(dataset) >= 4 * world_size else 1
     grad_accum = max(1, effective_batch_size // (world_size * per_device_bs))
     if distributed.is_main_process:
         create_artifact_dir(output, 2_000_000_000)
@@ -237,17 +253,24 @@ def run_sft(
         LoraConfig(r=64, lora_alpha=128, target_modules=LORA_TARGETS, task_type="CAUSAL_LM"),
     )
     names = [name for name, param in policy.named_parameters() if param.requires_grad]
-    if not any(".visual.merger." in name for name in names) or not any(
-        ".language_model." in name for name in names
+    if not all(
+        any(part in name for name in names)
+        for part in (".visual.merger.", ".visual.blocks.26.", ".language_model.")
     ):
-        raise RuntimeError("LoRA targets must include the language model and visual projector")
+        raise RuntimeError("LoRA must cover the language model, top ViT blocks and the merger")
     collator = DataCollatorForVisionLanguageModeling(processor, completion_only_loss=True)
+    relative_images = (
+        json.loads((split / "manifest.json").read_text()).get("schema_version") == "inverser-sft-v2"
+    )
 
     def collate(examples: list[dict[str, Any]]) -> dict[str, Any]:
         for example in examples:
             images = []
             for path in example["image_paths"]:
-                with Image.open(path) as image:
+                location = (split / path).resolve() if relative_images else Path(path)
+                if relative_images and not location.is_relative_to(split.resolve()):
+                    raise ValueError(f"SFT image path leaves the corpus: {path}")
+                with Image.open(location) as image:
                     images.append(image.convert("RGB"))
             example["images"] = images
         batch = collator(examples)
@@ -295,21 +318,21 @@ def run_sft(
             job_type="sft",
             config={
                 "model_name": model.name,
-                "answer_contract": "answer-tag-v1",
+                "answer_contract": "answer-tag-v2",
                 "seed": seed,
                 "steps": steps,
                 "world_size": world_size,
                 "per_device_train_batch_size": per_device_bs,
                 "gradient_accumulation_steps": grad_accum,
                 "effective_batch_size": eff_bs,
-                "examples": len(rows),
+                "examples": len(dataset),
                 "lora_rank": 64,
                 "lora_alpha": 128,
                 "learning_rate": 2e-5,
                 "loss": "completion_only",
             }
             | extract_dataset_metadata(split),
-            tags=["sft", "answer-tag-v1"],
+            tags=["sft", "answer-tag-v2"],
             group="sft-warmup",
         )
         if distributed.is_main_process and count is None
@@ -322,7 +345,7 @@ def run_sft(
     trainer = Trainer(
         model=policy,
         args=settings,
-        train_dataset=Dataset.from_list(rows),
+        train_dataset=dataset,
         data_collator=collate,
         processing_class=processor,
         callbacks=[wandb_cb] if wandb_cb is not None else None,
@@ -334,7 +357,7 @@ def run_sft(
                 "purpose": (
                     "multimodal_sft_optimizer_smoke" if count is not None else "multimodal_sft"
                 ),
-                "answer_contract": "answer-tag-v1",
+                "answer_contract": "answer-tag-v2",
                 "dataset_manifest_sha256": file_sha256(split / "manifest.json"),
                 "model_config_sha256": file_sha256(model / "config.json"),
                 "producer": producer_hashes("capo_trainer.py", "capo_env.py", "vlm_suite.py"),
@@ -344,7 +367,7 @@ def run_sft(
                 "per_device_train_batch_size": per_device_bs,
                 "gradient_accumulation_steps": grad_accum,
                 "effective_batch_size": eff_bs,
-                "examples": len(rows),
+                "examples": len(dataset),
                 "trainable_names": names,
                 "lora_rank": 64,
                 "lora_alpha": 128,

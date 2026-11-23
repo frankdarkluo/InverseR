@@ -13,11 +13,11 @@ MIN_FREE_BYTES = 200_000_000_000
 
 def configure_physics_runtime() -> None:
     """Isolate Pooltool's hard-coded HOME configuration inside this CLI process."""
-    home = PROJECT_ROOT / ".cache" / "pooltool-home"
+    home = PROJECT_ROOT / "cache" / "pooltool-home"
     if "pooltool" in sys.modules and Path.home() != home:
         raise RuntimeError("Pooltool was imported before its isolated runtime was configured")
     home.mkdir(parents=True, exist_ok=True)
-    numba_cache = PROJECT_ROOT / ".cache" / "numba"
+    numba_cache = PROJECT_ROOT / "cache" / "numba"
     numba_cache.mkdir(parents=True, exist_ok=True)
     os.environ["HOME"] = str(home)
     os.environ["NUMBA_CACHE_DIR"] = str(numba_cache)

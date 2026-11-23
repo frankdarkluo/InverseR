@@ -52,7 +52,13 @@ def main() -> int:
     )
     vlm_eval.add_argument("--split", type=Path, required=True)
     vlm_eval.add_argument("--output", type=Path, required=True)
-    vlm_eval.add_argument("--local-vllm-url", required=True)
+    vlm_eval_backend = vlm_eval.add_mutually_exclusive_group(required=True)
+    vlm_eval_backend.add_argument("--local-vllm-url")
+    vlm_eval_backend.add_argument(
+        "--proxy",
+        action="store_true",
+        help="OpenAI-compatible INVERSE_PROXY_BASE_URL with configs/proxy_model_aliases.json",
+    )
     vlm_eval.add_argument("--model", required=True)
     vlm_eval.add_argument("--revision", required=True)
     vlm_eval.add_argument("--tasks", choices=["forward", "T4", "T5"], nargs="+", required=True)
@@ -66,6 +72,9 @@ def main() -> int:
     vlm_eval.add_argument("--blind-protocol", type=Path)
     vlm_eval.add_argument("--arm")
     vlm_eval.add_argument("--seed", type=int, default=0)
+    vlm_eval.add_argument(
+        "--temperature", type=float, default=0.0, help="> 0 samples (calibrate-fapo-beta)"
+    )
     freeze_blind = commands.add_parser(
         "freeze-vlm-blind-protocol", help="Pin verified dataset, checkpoint and selection hashes"
     )
@@ -73,6 +82,12 @@ def main() -> int:
     freeze_blind.add_argument("--valid-manifest", type=Path, required=True)
     freeze_blind.add_argument("--arms", type=Path, required=True)
     freeze_blind.add_argument("--output", type=Path, required=True)
+    calibrate = commands.add_parser(
+        "calibrate-fapo-beta", help="Pre-register the additive arm's beta_E from sampled T4 runs"
+    )
+    calibrate.add_argument("--split", type=Path, required=True)
+    calibrate.add_argument("--run", type=Path, action="append", required=True)
+    calibrate.add_argument("--output", type=Path, required=True)
     selection = commands.add_parser(
         "select-capo-checkpoint", help="Pick a checkpoint from complete and matched valid runs"
     )
@@ -124,7 +139,7 @@ def main() -> int:
     capo_sft.add_argument("--model-path", type=Path, required=True)
     capo_sft.add_argument("--steps", type=int, required=True)
     capo_sft.add_argument("--count", type=int)
-    capo_sft.add_argument("--seed", type=int, default=20261119)
+    capo_sft.add_argument("--seed", type=int, default=42)
     grpo = commands.add_parser(
         "train-capo-grpo", help="Multimodal GRPO arms or FSDP joint curriculum on CUDA"
     )
@@ -132,12 +147,13 @@ def main() -> int:
     grpo.add_argument("--model-path", type=Path, required=True)
     grpo.add_argument("--adapter", type=Path, required=True)
     grpo.add_argument("--output", type=Path, required=True)
-    grpo.add_argument("--mode", choices=("capo", "outcome", "uncoupled"), required=True)
-    grpo.add_argument("--task", choices=("forward", "T4", "T5", "joint"), required=True)
+    grpo.add_argument("--mode", choices=("outcome", "additive", "capo"), required=True)
+    grpo.add_argument("--task", choices=("forward", "T4", "joint"), required=True)
+    grpo.add_argument("--beta-e", type=float, help="Additive arm only: calibrate-fapo-beta value")
     grpo.add_argument("--stage", type=int, choices=(1, 2, 3), default=3)
     grpo.add_argument("--steps", type=int, required=True)
     grpo.add_argument("--stage-steps", nargs=3, type=int)
-    grpo.add_argument("--seed", type=int, default=20261119)
+    grpo.add_argument("--seed", type=int, default=42)
     grpo.add_argument("--count", type=int)
     grpo.add_argument("--vllm-server-url")
     grpo.add_argument("--fsdp", action="store_true", help="Use two torchrun FSDP2 trainer ranks")
@@ -146,14 +162,25 @@ def main() -> int:
         "train-learned-wm", help="Fit a GPU world-model baseline and score CEM on valid"
     )
     wm.add_argument("--method", choices=("dino", "state"), required=True)
-    wm.add_argument("--train", type=Path, default=Path("data/research/inverser-vlm-v1/train"))
-    wm.add_argument("--valid", type=Path, default=Path("data/research/inverser-vlm-v1/valid"))
+    wm.add_argument("--train", type=Path, default=Path("data/research/inverser/sft"))
+    wm.add_argument("--valid", type=Path, default=Path("data/research/inverser/valid"))
     wm.add_argument("--dino-path", type=Path, default=Path("models/dinov2-small"))
     wm.add_argument("--output", type=Path, required=True)
     wm.add_argument("--epochs", type=int, required=True)
-    wm.add_argument("--seed", type=int, default=20261119)
+    wm.add_argument("--seed", type=int, default=42)
     wm.add_argument("--count", type=int)
     wm.add_argument("--valid-count", type=int)
+    oracle = commands.add_parser(
+        "run-oracle-cem", help="CPU upper bound: ground-truth state + Pooltool cost under CEM"
+    )
+    oracle.add_argument("--valid", type=Path, default=Path("data/research/inverser/valid"))
+    oracle.add_argument("--output", type=Path, required=True)
+    oracle.add_argument("--seed", type=int, default=42)
+    oracle.add_argument("--workers", type=int, default=32)
+    oracle.add_argument("--count", type=int, help="Scene prefix, e.g. 2468 for the v3 valid panel")
+    oracle.add_argument(
+        "--refine-evals", type=int, default=1500, help="Nelder-Mead polish; 0 = matched-budget CEM"
+    )
     public_eval = commands.add_parser(
         "run-public-eval", help="Ledgered local PhysBench or DeepPHY puzzle evaluation"
     )
@@ -290,6 +317,17 @@ def main() -> int:
             limit=args.count,
             valid_limit=args.valid_count,
         )
+    elif args.command == "run-oracle-cem":
+        from inverser.learned_wm import run_oracle_cem
+
+        result = run_oracle_cem(
+            args.valid,
+            args.output,
+            seed=args.seed,
+            workers=args.workers,
+            refine_evals=args.refine_evals,
+            count=args.count,
+        )
     elif args.command == "train-capo-grpo":
         from inverser.capo_grpo import run_grpo
 
@@ -308,6 +346,7 @@ def main() -> int:
             stage_steps=tuple(args.stage_steps) if args.stage_steps else None,
             fsdp=args.fsdp,
             resume_from=args.resume_from,
+            beta_e=args.beta_e,
         )
     elif args.command == "train-capo-sft":
         from inverser.capo_trainer import run_sft
@@ -358,6 +397,10 @@ def main() -> int:
         from inverser.capo_checkpoint import export_fsdp_adapter
 
         result = export_fsdp_adapter(args.checkpoint, args.initial_adapter, args.output)
+    elif args.command == "calibrate-fapo-beta":
+        from inverser.capo_selection import calibrate_beta_e
+
+        result = calibrate_beta_e(args.output, args.split, args.run)
     elif args.command == "select-capo-checkpoint":
         from inverser.capo_selection import select_checkpoint
 
@@ -375,24 +418,36 @@ def main() -> int:
             args.arms,
         ).model_dump(mode="json")
     elif args.command == "run-vlm-eval":
-        from inverser.study_calls import local_vllm_backends
+        from inverser.study_calls import local_vllm_backends, openai_proxy_backends
         from inverser.vlm_eval import run_vlm_eval
 
-        backend = local_vllm_backends(
-            args.local_vllm_url,
-            (args.model,),
-            model_revision=args.revision,
-            reasoning_effort="high" if args.thinking else "none",
-            max_output_tokens=args.max_output_tokens or (2048 if args.thinking else 1024),
-            request_token_reservation=16384,
-            timeout_s=180,
-            enable_thinking=args.thinking,
-            thinking_token_budget=(
-                args.thinking_token_budget
-                if args.thinking_token_budget is not None
-                else (1024 if args.thinking else None)
-            ),
-        )[0]
+        if args.proxy:
+            backend = openai_proxy_backends(
+                Path("configs/proxy_model_aliases.json"),
+                (args.model,),
+                model_revision=args.revision,
+                reasoning_effort="high" if args.thinking else "none",
+                max_output_tokens=args.max_output_tokens or 8192,
+                request_token_reservation=16384,
+                timeout_s=300,
+            )[0]
+        else:
+            backend = local_vllm_backends(
+                args.local_vllm_url,
+                (args.model,),
+                model_revision=args.revision,
+                reasoning_effort="high" if args.thinking else "none",
+                max_output_tokens=args.max_output_tokens or (2048 if args.thinking else 1024),
+                request_token_reservation=16384,
+                timeout_s=180,
+                temperature=args.temperature,
+                enable_thinking=args.thinking,
+                thinking_token_budget=(
+                    args.thinking_token_budget
+                    if args.thinking_token_budget is not None
+                    else (1024 if args.thinking else None)
+                ),
+            )[0]
         result = run_vlm_eval(
             args.split,
             args.output,

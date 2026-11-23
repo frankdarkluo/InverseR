@@ -11,11 +11,15 @@ InverseR 已接受 G1 的有限分层证据范围，并锁定小型开发诊断�
   系统梳理 2024–2026 年 RSI（自指代码演化、无验证器坍缩 vs 外部验证器自博弈）与 Agentic Skill-RL
   （SkillRL、SKILL0、ReSkill、RSIPO、TrackRL、PhysEvolve 等 30 篇已核查文献），提出基于 2D-to-3D
   物理引擎防坍缩验证、四大可调用物理技能、乘法因果门控与技能渐进内化的 `CAPO-RSI` 三轮闭环方案。
+  [Stage 2 技能规格（v0.2 草案）](research/capo_rsi_skill_spec.md)按 2026-11-20 的数据与源码核查修订技能池、红线与待拍板项。
 
 - [当前 InverseR-VLM / CAPO 执行计划](research/capo_execution.md)：八阶段验收、
   GPU/API 路线、模型实际可用性、待验证假设和分区/盲测边界；
   [研究者原始计划](research/capo_requested_plan.md)完整保留。
   [本地运行与验收](research/capo_runtime.md)记录实际 GPU smoke、代理失败与外部资产边界。
+
+- [Table 1 Baseline 填表计划](research/table1_baselines_plan.md)：论文 Table 1 各行的输入/输出、
+  valid 初步结果、GPU 排队与指标口径。
 
 - [训练路线协议](research/training_protocol.md)：后训练阶梯 × 能力链的预注册——训练集与 hold-out、
   单轮环境与奖励、T0–T5 六臂、H1–H4 假设、本地 vLLM 评测路线和 11/15、12/1、12/15 决策点。

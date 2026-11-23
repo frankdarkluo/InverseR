@@ -21,7 +21,7 @@ from inverser.model_adapters import VLM_SYSTEM_PROMPT, ModelCall
 from inverser.physics import SimulationFailure, SnookerSimulator
 from inverser.pilot import FAMILIES, MAX_CANDIDATES, sample_case
 from inverser.runtime import file_sha256, fingerprint, write_json
-from inverser.schemas import CueAction, PhysicsConfig, Record, ShotRecord
+from inverser.schemas import CueAction, Layout, PhysicsConfig, Record, ShotRecord
 from inverser.study import GoalInput, GoalSubmission, make_study_case, public_physics
 from inverser.study_calls import create_artifact_dir, producer_hashes
 
@@ -120,14 +120,39 @@ def training_goals(
     )
 
 
-def goal_reward(loss_radii: float | None, success: bool, *, scale_radii: float = 20.0) -> float:
+def goal_reward(
+    loss_radii: float | None,
+    success: bool,
+    *,
+    scale_radii: float = 20.0,
+    baseline_radii: float | None = None,
+) -> float:
     """0 for an unusable submission; up to 1 as the resting error (ball radii, with the status,
     pocket and scratch penalties of endpoint_loss) shrinks within ``scale_radii``; plus 1 on
     success at the task tolerance. GRPO uses group-relative advantages, so only the monotone
-    shape matters; ``scale_radii`` is the one pre-registered knob (see training_protocol.md)."""
+    shape matters; ``scale_radii`` is the one pre-registered knob (see training_protocol.md).
+    With ``baseline_radii`` (the error of not shooting) the scale shrinks to it, so a tap that
+    leaves the table as it is earns nothing even when the goal is close to the start."""
     if loss_radii is None:
         return 0.0
-    return float(success) + max(0.0, 1.0 - loss_radii / scale_radii)
+    scale = scale_radii if baseline_radii is None else min(scale_radii, baseline_radii)
+    return float(success) + max(0.0, 1.0 - loss_radii / scale)
+
+
+def tail_reward(loss_radii: float | None, baseline_radii: float) -> float:
+    """Far-field credit for beating the no-shot error; 0 for a tap or anything worse."""
+    if loss_radii is None:
+        return 0.0
+    return 0.2 * max(0.0, 1.0 - loss_radii / baseline_radii)
+
+
+def do_nothing_loss(
+    initial: Layout, target: Layout, *, ball_radius_m: float, table_metres: tuple[float, float]
+) -> float:
+    """The goal error, in ball radii, of leaving every ball where it starts."""
+    return endpoint_loss(
+        initial, target, ball_radius_m=ball_radius_m, table_diagonal_m=hypot(*table_metres)
+    )
 
 
 def parse_submission(text: str) -> CueAction | None:

@@ -86,7 +86,7 @@ def write_figures(output: Path, summaries: dict[str, Any], sources: dict[str, An
     feedback = [
         (name, data["T5_by_regime_and_attempt"]["unknown_friction"])
         for name, data in summaries.items()
-        if data["T5_by_regime_and_attempt"]["unknown_friction"]["6"]["n"]
+        if data["T5_by_regime_and_attempt"]["unknown_friction"]["1"]["n"]
     ]
     if feedback:
         height = 280 + 19 * len(feedback)
@@ -96,12 +96,16 @@ def write_figures(output: Path, summaries: dict[str, Any], sources: dict[str, An
             points.extend(
                 [f'<path d="M66 {y}H550" stroke="#dedfe3"/>', _text(27, y + 4, f"{level}%")]
             )
-        for turn in range(1, 7):
+        turns = max(len(curve) for _, curve in feedback)  # the attempt cap: 6 in v1, 3 in v3
+        for turn in range(1, turns + 1):
             points.append(_text(75 + 94 * (turn - 1), 258, str(turn), centered=True))
         points.append(_text(306, 278, "Attempts used (cumulative success)", centered=True))
         for i, (name, curve) in enumerate(feedback):
             color = COLORS[i % len(COLORS)]
-            data = [(75 + 94 * (t - 1), 240 - 180 * curve[str(t)]["rate"]) for t in range(1, 7)]
+            data = [
+                (75 + 94 * (turn - 1), 240 - 180 * values["rate"])
+                for turn, values in enumerate(curve.values(), 1)
+            ]
             xy = " ".join(f"{x},{y:.2f}" for x, y in data)
             dash = ("0", "7 4", "2 4", "10 3 2 3")[i % 4]
             points.append(

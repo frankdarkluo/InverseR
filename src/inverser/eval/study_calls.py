@@ -15,6 +15,7 @@ from inverser.diagnostics import ForwardScore
 from inverser.evaluation import TrialLedger
 from inverser.metrics import EndpointScore
 from inverser.model_adapters import (
+    CAUSAL_PROMPT,
     VLM_SYSTEM_PROMPT,
     BackendConfig,
     InvalidModelReply,
@@ -503,30 +504,23 @@ class StudyAdapter(ModelAdapter):
         if (wait := self._next_request_at - monotonic()) > 0:
             sleep(wait)
         self._next_request_at = monotonic() + self.min_request_interval_s
-        content: list[dict[str, object]] = [{"type": "text", "text": prompt}]
-        content.extend(
+        content: list[dict[str, object]] = [
             {
                 "type": "image_url",
                 "image_url": {"url": "data:image/png;base64," + image.png_base64},
             }
             for image in images
-        )
+        ]
+        # Tag answers follow TRL's SFT/GRPO layout (images before the text); JSON suites keep
+        # their historical text-first order.
+        content.insert(len(content) if answer_tag else 0, {"type": "text", "text": prompt})
         headers = {"X-Request-ID": request_id}
         token = self._token_provider() if self._token_provider is not None else self._api_key
         if token is not None:
             headers["Authorization"] = "Bearer " + token
         thinking = self.config.enable_thinking is True
         if answer_tag:
-            system = (
-                "Solve the task using the provided images and physical parameters. "
-                "Put the final answer inside <answer>...</answer> using the exact requested tags, "
-                "and stop immediately after </answer>."
-            )
-            if thinking:
-                system = (
-                    "Reason about the physical events first inside <think>...</think> "
-                    "(within 1024 tokens). " + system
-                )
+            system = CAUSAL_PROMPT  # the exact system prompt of SFT and RL rollouts
         else:
             system = "Return only the requested numerical JSON."
             if self.config.kind in ("local_vllm", "openai_proxy"):
@@ -583,10 +577,9 @@ class StudyAdapter(ModelAdapter):
                 request_payload["reasoning_effort"] = self.config.reasoning_effort
             if self.config.thinking_token_budget is not None:
                 request_payload["thinking_token_budget"] = self.config.thinking_token_budget
-            if self.config.kind == "local_vllm" and answer_tag:
-                request_payload["stop"] = ["</answer>"]
-                request_payload["include_stop_str_in_output"] = True
-            elif self.config.kind == "local_vllm" and output_schema is not None:
+            # No stop string for local tag answers: like RL rollouts, generate to EOS, so a
+            # "</answer>" mentioned inside <think> cannot end the reply early.
+            if self.config.kind == "local_vllm" and not answer_tag and output_schema is not None:
                 request_payload["response_format"] = {
                     "type": "json_schema",
                     "json_schema": {

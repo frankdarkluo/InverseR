@@ -1,0 +1,9 @@
+8a416a57876edb12fbea2c3f83a722df289c62ceff89ce4be32f04526cd38344  /data/v-guoqingluo/InverseR/data/research/inverser-v3/rl/manifest.json
+baace3e2bd0f665398667ec9e67929fe68bd3d9b4fea47bd6010e755509784ea  data/research/capo-sft-v3-2400step-bs32-seed20261119-v1/checkpoint/adapter_model.safetensors
+f5b6cfd195fe2dbc1a866d699d36be6df27e589ef517d1e448f237a74c255f5d  /data/v-guoqingluo/InverseR/data/research/capo-v3-beta-e.json
+fda37f84e8660140e74932f08d6e90591d63f82312220052052fe00e5ce1b6f9  /data/v-guoqingluo/InverseR/src/inverser/capo/capo_grpo.py
+97d68b5be78b3acf847b7509cbc406ba49b22ff7c4d663ddf033d12711257829  /data/v-guoqingluo/InverseR/src/inverser/capo/capo_checkpoint.py
+4eb801042bcc5681836f7f81dafeff1dc8183401debd235f0320ff73c933c66c  /data/v-guoqingluo/InverseR/src/inverser/capo/capo_env.py
+9b578910592281a7962ae77ea5a8fd34598bf2188608e6690a2f00dc5af8c6c3  /data/v-guoqingluo/InverseR/src/inverser/capo/training_env.py
+d0aea9cb46928b4d5d51a0b09dc00aa15e0cc4c90e4dd63c5518bdfc67f4b48f  /data/v-guoqingluo/InverseR/src/inverser/capo/t5_feedback.py
+c0f847021ab31237a38554b2f42b117caa0ba6afda84231826164969bd0eddfc  /data/v-guoqingluo/InverseR/scripts/capo_train_queue.sh

@@ -65,7 +65,12 @@ def freeze_blind_protocol(
 
 def evaluation_producers() -> dict[str, str]:
     return producer_hashes(
-        "blind_protocol.py", "vlm_eval.py", "vlm_suite.py", "capo_env.py", "study_calls.py"
+        "blind_protocol.py",
+        "vlm_eval.py",
+        "vlm_suite.py",
+        "capo_env.py",
+        "study_calls.py",
+        "t5_feedback.py",
     )
 
 

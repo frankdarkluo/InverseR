@@ -48,7 +48,50 @@ def test_mechanism_denominators_keep_invalids_distinct_from_stasis():
     assert counts["all_coordinates_given_wrong_event"] == {"n": 2, "count": 1, "rate": 0.5}
     assert counts["stasis_given_true_collision_and_valid"] == {"n": 2, "count": 1, "rate": 0.5}
     assert report["T5_by_attempt"]["1"]["rate"] == 0
-    assert report["T5_by_attempt"]["6"]["rate"] == 1
+    assert report["T5_by_attempt"]["6"]["rate"] == 1  # v1 rows: six attempts
+
+
+def test_v3_goal_rows_report_their_attempt_cap_forecasts_and_the_no_shot_baseline():
+    def attempt(loss, success=False):
+        return {"loss_radii": loss, "success": success}
+
+    def forecast(present, agreement=None):
+        return {"forecast_present": present, "event_agreement": agreement}
+
+    report = summarize_rows(
+        [
+            {
+                "task": "T4",
+                "success": False,
+                "attempts": [attempt(30.0)],
+                "baseline_radii": 40.0,
+                "max_attempts": 1,
+                "forecasts": [forecast(True, 1.0)],
+            },
+            {
+                "task": "T4",
+                "success": False,
+                "attempts": [attempt(None)],
+                "baseline_radii": 40.0,
+                "max_attempts": 1,
+                "forecasts": [forecast(False)],
+            },
+            {
+                "task": "T5",
+                "success": True,
+                "attempts": [attempt(9.0), attempt(0.5, True)],
+                "baseline_radii": 12.0,
+                "max_attempts": 3,
+                "forecasts": [forecast(True, 0.5), forecast(True, 1.0)],
+            },
+        ]
+    )
+    assert list(report["T5_by_attempt"]) == ["1", "2", "3"]
+    assert report["T5_by_attempt"]["2"]["rate"] == 1
+    assert report["T4_beats_no_shot"] == {"n": 2, "count": 1, "rate": 0.5}
+    assert report["T4_forecast"]["coverage"]["rate"] == 0.5
+    assert report["T4_forecast"]["event_agreement"] == {"n": 1, "rate": 1.0}
+    assert report["T5_forecast"]["event_agreement"] == {"n": 2, "rate": 0.75}
 
 
 def test_analysis_is_byte_reproducible_and_rejects_modified_jobs(tmp_path, monkeypatch):

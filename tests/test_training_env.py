@@ -18,6 +18,7 @@ from inverser.training_env import (
     goal_reward,
     load_training_goals,
     prepare_training_set,
+    tail_reward,
     training_goals,
     training_records,
 )
@@ -50,6 +51,18 @@ def test_goal_reward_is_monotone_with_a_success_bonus():
     assert goal_reward(None, False) == 0.0
     assert goal_reward(10.0, False) == 0.5 and goal_reward(100.0, False) == 0.0
     assert goal_reward(0.5, True) == 1.975 and goal_reward(10.0, False, scale_radii=40) == 0.75
+
+
+def test_no_shot_baseline_leaves_a_tap_with_nothing_near_or_far():
+    # Far goal (L0 = 50r): near keeps its 20r scale, the tail pays only for beating L0.
+    assert goal_reward(10.0, False, baseline_radii=50.0) == 0.5
+    assert tail_reward(25.0, 50.0) == pytest.approx(0.1)
+    assert goal_reward(50.0, False, baseline_radii=50.0) == tail_reward(50.0, 50.0) == 0.0
+    assert tail_reward(80.0, 50.0) == 0.0 and tail_reward(None, 50.0) == 0.0
+    # Close goal (L0 = 8r): the near scale shrinks to L0, so a tap (L = L0) earns nothing.
+    assert goal_reward(8.0, False, baseline_radii=8.0) == 0.0
+    assert goal_reward(4.0, False, baseline_radii=8.0) == 0.5
+    assert goal_reward(0.5, True, baseline_radii=8.0) == pytest.approx(1 + 1 - 0.5 / 8)
 
 
 def test_goal_environment_scores_the_formal_goal_contract():

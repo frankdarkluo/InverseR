@@ -4,6 +4,7 @@ import pytest
 
 from inverser.capo_env import (
     GoalEpisode,
+    event_agreement,
     forward_reward,
     parse_forward_reward,
     twin_contrast,
@@ -51,6 +52,22 @@ def test_causal_reward_requires_events_even_when_coordinates_are_correct():
     assert parse_forward_reward(truth.model_dump_json(), truth, 0.1) == -1
     assert parse_forward_reward(f"```xml\n{tagged}\n```", truth, 0.1) == -1
     assert forward_reward(truth, truth, 0.1, reasoning_tokens=2048).total == 2.25
+
+
+def test_event_agreement_averages_collisions_first_contact_and_cushions():
+    truth = VLMForwardOutput(
+        object_collisions=(True, True),
+        first_contact=1,
+        cushion_set=("LEFT",),
+        cushion_sequence=("LEFT",),
+        frames=(((0.0, 0.0), (0.0, 1.0), (1.0, 1.0)),) * 5,
+        resting_state=((1.0, 0.0), (0.0, 1.0), (1.0, 1.0)),
+    )
+    assert event_agreement(truth, truth) == 1.0
+    second_first = truth.model_copy(update={"first_contact": 2})
+    assert event_agreement(second_first, truth) == pytest.approx(2 / 3)  # T1 is now rewarded
+    one_hit = truth.model_copy(update={"object_collisions": (True, False)})
+    assert event_agreement(one_hit, truth) == pytest.approx((2 / 3 + 1 + 1) / 3)
 
 
 def test_twin_contrast_rewards_change_but_not_stasis_wrong_direction_or_exaggeration():

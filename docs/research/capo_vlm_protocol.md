@@ -22,14 +22,14 @@
 - T1 比较物体球的碰撞向量及母球首次接触的物体编号，两者均正确才记 1。T2 同时比较边界集合和有序边界事件（保留重复）。Pooltool 线性/圆形库边面按其几何参考点到四边的最近距离映射，平局用固定 `LEFT, RIGHT, BOTTOM, TOP` 顺序；映射记录在 manifest。
 - T3 在 1、2、3、4、5 秒和真正静止终态逐球比较。坐标欧氏距离 ≤1r 或正确落袋记命中；场景 `T3` 是所有时刻/球编号上的命中率，另外记录 `T3_all_slots`。`S_total = 0.3*T1 + 0.3*T2 + 0.4*T3`；跨场景宏平均，不用球多的布局提高权重。
 - T4 看到初始和目标两张图，输出方向、速度、杆头横向/纵向偏移。目标同色物体球可交换；以隐藏执行的 1r endpoint 成功为准。目标图不携带出杆动作，编号不是跟踪真值。
-- T5 最多六次，均从同一初始状态执行，命中可提前结束。标准条件与 OOD 分开；OOD 各一半使用滑动/滚动摩擦 ×0.5 或 ×2 并使用相应库边恢复系数 0.65 或 0.97。公开 prompt 只包含被隐藏参数的名字，不包含数值、条件名或私有文件；原始 outcome 与相对目标残差是交互观测，非隐藏摩擦参数。
+- T5 最多六次，均从同一初始状态执行，命中可提前结束。标准条件与 OOD 分开；OOD 各一半使用滑动/滚动摩擦 ×0.5 或 ×2 并使用相应库边恢复系数 0.65 或 0.97。公开 prompt 只包含被隐藏参数的名字，不包含数值、条件名或私有文件。自 2026-11-21（D2）起，T5 每杆的文本反馈只有 `ordinal`、`success`、`failure`、`first_contact` 和 `cushions`，不再给出 outcome 坐标、目标残差和 `loss_radii`；位置只通过反馈图提供（见 `src/inverser/capo/t5_feedback.py`）。在此之前的 valid T5 结果使用的是旧反馈。
 - `public/scenes.jsonl` 是索引而非可整体传给模型的 prompt。正向与逆向必须分别组装；尤其不得把同一行 forward 的动作、forward PNG 或私有行传给 T4/T5。`private/` 只供训练标签构造、事后盲测评分及仿真 judge 使用。模型选择只用 valid 结果。
 
 ## 验证
 
 ```bash
-.venv/bin/python -m inverser prepare-vlm-suite
-.venv/bin/python -m inverser prepare-vlm-suite --verify-only
+envs/main/bin/python -m inverser prepare-vlm-suite
+envs/main/bin/python -m inverser prepare-vlm-suite --verify-only
 ```
 
 生成阶段将每个接受的动作重复执行一次，要求事件、时间、状态均一致且见证满足 endpoint；存的是经过该检查的记录。`--verify-only` 不运行模型或重新仿真：重新计算 SHA-256、重算布局指纹和 twin 偏移、确认所有公开图像结构可读、回查交集、任务 schema、T1–T3 评分自洽及 OOD 隐藏参数。评分规则和数据计数是固定协议，不因模型效果事后改变。仅凭数据验证不能得出 CAPO 提升、消除 Stasis Bias 或达到 70% 的结论。
@@ -37,5 +37,5 @@
 2026-11-19 已生成正式三分区。生成日志 `artifacts/capo-vlm-freeze-v1.log`；
 独立验证回执 `artifacts/capo-vlm-verification-v1.json`。
 模型请求入口 `run-vlm-eval` 当前只允许开发/训练/valid，拒绝无冻结协议的 test；
-T5 的图像反馈将目标与最新 outcome 并排打包，始终遵守两个图像输入的限制。
-`train-capo-sft` 在 `.venv-train` 运行且仅接受 train manifest。
+T5 的图像反馈将目标与最新 outcome 并排打包，始终遵守两个图像输入的限制。自 D2 起，outcome 图统一为长边 512 px，并画出 GOAL 黄圈和之前各杆的编号落点；训练与评测使用同一张图。
+`train-capo-sft` 在 `envs/main` 运行且仅接受 train manifest。

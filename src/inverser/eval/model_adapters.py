@@ -30,6 +30,14 @@ VLM_SYSTEM_PROMPT = (
     "Return one JSON answer that conforms to output_schema. "
     "Do not return the schema, the task, or a copy of the input."
 )
+# The one system prompt for every <answer>-tag request: SFT, RL rollouts and evaluation.
+CAUSAL_PROMPT = (
+    "In the reasoning segment, first identify ball positions, aiming geometry, and the likely "
+    "ordered contacts; then consider sliding, rolling, and any 3D tip-offset spin deflection; "
+    "finally use those physical laws to calibrate the numeric prediction or shot. Keep reasoning "
+    "within 1024 tokens inside <think>...</think>, then output only the requested "
+    "<answer>...</answer> block."
+)
 
 
 class RenderedAsset(Record):

@@ -32,8 +32,15 @@ from inverser.study_calls import producer_hashes, require_data_path
 
 TIMES = (1.0, 2.0, 3.0, 4.0, 5.0)
 HORIZON_TAGS = ("t1s", "t2s", "t3s", "t4s", "t5s", "resting")
-FORWARD_TAGS = ("collisions", "first_contact", "cushions", *HORIZON_TAGS)
+EVENT_TAGS = ("collisions", "first_contact", "cushions")
+FORWARD_TAGS = (*EVENT_TAGS, *HORIZON_TAGS)
 GOAL_TAGS = ("azimuth_deg", "cue_speed_mps", "tip_side", "tip_vertical")
+_EVENT_SPEC = (
+    "each object ball's participation in any ball-ball contact (use 'none' when ball_count is "
+    "1), the object slot the cue ball hits first ('none' if it hits no object ball; never a "
+    "cushion name), and the ordered boundaries hit by any ball from LEFT, RIGHT, BOTTOM, TOP "
+    "including repeats ('none' if no cushion bounce)"
+)
 BOUNDARIES: set[str] = {"LEFT", "RIGHT", "BOTTOM", "TOP"}
 TAG_PATTERN = re.compile(r"<([a-z0-9_]+)>(.*?)</\1>", re.DOTALL)
 FAMILIES: tuple[Family, ...] = ("free_roll", "center", "vertical", "side")
@@ -92,23 +99,12 @@ class VLMForwardInput(Record):
     action: CueAction
 
     def prompt(self) -> str:
-        collisions_hint = (
-            "none"
-            if self.ball_count == 1
-            else " | ".join(
-                f"{slot}:{'true' if slot == 1 else 'false'}"
-                for slot in range(1, self.ball_count)
-            )
-        )
-        first_hint = "none" if self.ball_count == 1 else "1"
         slots_hint = " | ".join(
             f"{slot}: 0.500, 1.000" for slot in range(self.ball_count)
         )
         template = (
             "<answer>\n"
-            f"<collisions>{collisions_hint}</collisions>\n"
-            f"<first_contact>{first_hint}</first_contact>\n"
-            "<cushions>LEFT, BOTTOM</cushions>\n"
+            + _event_template(self.ball_count)
             + "\n".join(f"<{tag}>{slots_hint}</{tag}>" for tag in HORIZON_TAGS)
             + "\n</answer>"
         )
@@ -117,10 +113,7 @@ class VLMForwardInput(Record):
             "cue azimuth in x-right/y-up metres and encodes cue-stick speed at 0.16 seconds "
             "per ray; the inset shows horizontal and vertical tip offsets. The action fields "
             "give exact commands for calibration; read initial positions from the image. "
-            "Predict each object ball's participation in any ball-ball contact (use 'none' "
-            "when ball_count is 1), the object slot first hit by the cue ('none' if none), "
-            "and the ordered boundaries hit by any ball from LEFT, RIGHT, BOTTOM, TOP "
-            "including repeats ('none' if no cushion bounce). Predict all numbered slots "
+            f"Predict {_EVENT_SPEC}. Predict all numbered slots "
             f"0..{self.ball_count - 1} in order at 1s..5s and when stationary, using "
             "'slot: x, y' in metres or 'slot: pocketed'. Return only the <answer> block:\n"
             f"{template}\n"
@@ -131,21 +124,19 @@ class VLMForwardInput(Record):
         )
 
 
-class VLMForwardOutput(Record):
+class ContactForecast(Record):
+    """The discrete contact events of one shot: forward T1/T2 targets and the T4/T5 forecast."""
+
     object_collisions: tuple[StrictBool, ...] = Field(max_length=3)
     first_contact: int | None = Field(ge=1, le=3)
     cushion_set: tuple[Boundary, ...] = Field(max_length=4)
     cushion_sequence: tuple[Boundary, ...] = Field(max_length=1000)
-    frames: tuple[tuple[Position, ...], ...] = Field(min_length=5, max_length=5)
-    resting_state: tuple[Position, ...]
 
     @model_validator(mode="after")
-    def validate_output(self) -> Self:
-        size = len(self.object_collisions) + 1
-        if any(len(frame) != size for frame in (*self.frames, self.resting_state)):
-            raise ValueError("Coordinates must cover every numbered slot at every horizon")
+    def validate_events(self) -> Self:
         if self.first_contact is not None and (
-            self.first_contact >= size or not self.object_collisions[self.first_contact - 1]
+            self.first_contact > len(self.object_collisions)
+            or not self.object_collisions[self.first_contact - 1]
         ):
             raise ValueError("First cue contact must identify a colliding object ball")
         if len(set(self.cushion_set)) != len(self.cushion_set) or set(self.cushion_set) != set(
@@ -155,14 +146,14 @@ class VLMForwardOutput(Record):
         return self
 
 
-class CoordinateOnly(Record):
+class VLMForwardOutput(ContactForecast):
     frames: tuple[tuple[Position, ...], ...] = Field(min_length=5, max_length=5)
-    resting_state: tuple[Position, ...] = Field(min_length=1, max_length=4)
+    resting_state: tuple[Position, ...]
 
     @model_validator(mode="after")
-    def validate_slots(self) -> Self:
-        size = len(self.resting_state)
-        if any(len(frame) != size for frame in self.frames):
+    def validate_output(self) -> Self:
+        size = len(self.object_collisions) + 1
+        if any(len(frame) != size for frame in (*self.frames, self.resting_state)):
             raise ValueError("Coordinates must cover every numbered slot at every horizon")
         return self
 
@@ -177,12 +168,12 @@ class VLMGoalInput(Record):
     ball_radius_m: float = Field(gt=0)
     parameters: dict[str, float]
     withheld_parameters: tuple[str, ...] = ()
-    max_attempts: Literal[1, 6]
+    max_attempts: Literal[1, 3, 6]  # T5: 6 in v1, 3 in inverser-v3
 
     @model_validator(mode="after")
     def validate_condition(self) -> Self:
         if (self.task_id == "T4_visual_inverse") != (self.max_attempts == 1):
-            raise ValueError("T4 is single shot and T5 has a six-attempt cap")
+            raise ValueError("T4 is single shot and T5 has a multi-attempt cap")
         hidden = set(self.withheld_parameters)
         visible = set(self.parameters)
         if hidden not in (set(), set(WITHHELD)) or visible != set(DYNAMIC_PARAMETERS) - hidden:
@@ -199,9 +190,11 @@ class VLMGoalInput(Record):
             "<= 0.5 with tip_side^2 + tip_vertical^2 <= 0.25). Goal object-ball numbers are "
             "local; same-colour objects are exchangeable. For T5 each attempted shot starts "
             "again from INITIAL; use available outcome feedback to refine the next action. "
+            f"Also forecast the contacts your shot will produce: {_EVENT_SPEC}. "
             "Return only the <answer> block:\n"
             "<answer>\n"
-            "<azimuth_deg>62.45</azimuth_deg>\n"
+            + _event_template(self.ball_count)
+            + "<azimuth_deg>62.45</azimuth_deg>\n"
             "<cue_speed_mps>1.38</cue_speed_mps>\n"
             "<tip_side>0.00</tip_side>\n"
             "<tip_vertical>0.25</tip_vertical>\n"
@@ -237,7 +230,23 @@ def format_position_row(positions: tuple[Position, ...]) -> str:
     )
 
 
-def format_forward_answer(output: VLMForwardOutput) -> str:
+def _event_template(ball_count: int) -> str:
+    collisions = (
+        "none"
+        if ball_count == 1
+        else " | ".join(
+            f"{slot}:{'true' if slot == 1 else 'false'}" for slot in range(1, ball_count)
+        )
+    )
+    first = "none" if ball_count == 1 else "1"
+    return (
+        f"<collisions>{collisions}</collisions>\n"
+        f"<first_contact>{first}</first_contact>\n"
+        "<cushions>LEFT, BOTTOM</cushions>\n"
+    )
+
+
+def _format_events(output: ContactForecast) -> list[str]:
     collisions = (
         "none"
         if not output.object_collisions
@@ -248,12 +257,18 @@ def format_forward_answer(output: VLMForwardOutput) -> str:
     )
     first = "none" if output.first_contact is None else str(output.first_contact)
     cushions = "none" if not output.cushion_sequence else ", ".join(output.cushion_sequence)
-    horizons = (*output.frames, output.resting_state)
-    lines = [
-        "<answer>",
+    return [
         f"<collisions>{collisions}</collisions>",
         f"<first_contact>{first}</first_contact>",
         f"<cushions>{cushions}</cushions>",
+    ]
+
+
+def format_forward_answer(output: VLMForwardOutput) -> str:
+    horizons = (*output.frames, output.resting_state)
+    lines = [
+        "<answer>",
+        *_format_events(output),
         *(
             f"<{tag}>{format_position_row(row)}</{tag}>"
             for tag, row in zip(HORIZON_TAGS, horizons, strict=True)
@@ -263,53 +278,54 @@ def format_forward_answer(output: VLMForwardOutput) -> str:
     return "\n".join(lines)
 
 
-def format_coordinate_answer(output: CoordinateOnly | VLMForwardOutput) -> str:
-    horizons = (*output.frames, output.resting_state)
+def format_goal_answer(
+    output: VLMGoalOutput | CueAction, forecast: ContactForecast | None = None
+) -> str:
     return "\n".join(
         [
             "<answer>",
-            *(
-                f"<{tag}>{format_position_row(row)}</{tag}>"
-                for tag, row in zip(HORIZON_TAGS, horizons, strict=True)
-            ),
+            *(_format_events(forecast) if forecast is not None else ()),
+            f"<azimuth_deg>{output.azimuth_deg:.4f}</azimuth_deg>",
+            f"<cue_speed_mps>{output.cue_speed_mps:.4f}</cue_speed_mps>",
+            f"<tip_side>{output.tip_side:.4f}</tip_side>",
+            f"<tip_vertical>{output.tip_vertical:.4f}</tip_vertical>",
             "</answer>",
         ]
     )
 
 
-def format_goal_answer(output: VLMGoalOutput | CueAction) -> str:
-    return (
-        "<answer>\n"
-        f"<azimuth_deg>{output.azimuth_deg:.4f}</azimuth_deg>\n"
-        f"<cue_speed_mps>{output.cue_speed_mps:.4f}</cue_speed_mps>\n"
-        f"<tip_side>{output.tip_side:.4f}</tip_side>\n"
-        f"<tip_vertical>{output.tip_vertical:.4f}</tip_vertical>\n"
-        "</answer>"
-    )
-
-
-def _extract_answer_tags(text: str, required: tuple[str, ...]) -> dict[str, str]:
+def _extract_answer_tags(
+    text: str,
+    required: tuple[str, ...],
+    *,
+    optional: tuple[str, ...] = (),
+    lenient: bool = False,
+) -> dict[str, str]:
+    """Strict: the reply after reasoning is exactly one <answer> block (RL rewards). Lenient:
+    text around that single block is ignored (evaluation). ``optional`` tags are all or none."""
     _, body = split_reasoning(text)
     stripped = body.strip()
+    start, end = stripped.find("<answer>"), stripped.find("</answer>") + len("</answer>")
     if (
-        not stripped.startswith("<answer>")
-        or not stripped.endswith("</answer>")
-        or stripped.count("<answer>") != 1
+        stripped.count("<answer>") != 1
         or stripped.count("</answer>") != 1
+        or end < start
+        or not lenient
+        and (start != 0 or end != len(stripped))
     ):
         raise ValueError("Reply must wrap the final prediction in a single <answer>...</answer>")
-    inner = stripped[len("<answer>") : -len("</answer>")]
+    inner = stripped[start + len("<answer>") : end - len("</answer>")]
     found: dict[str, str] = {}
     cursor = 0
     for match in TAG_PATTERN.finditer(inner):
         if inner[cursor : match.start()].strip():
             raise ValueError("Unexpected text between <answer> slot tags")
         name, value = match.group(1), match.group(2).strip()
-        if name in found or name not in required:
+        if name in found or name not in (*required, *optional):
             raise ValueError(f"Duplicate or unexpected slot tag: <{name}>")
         found[name] = value
         cursor = match.end()
-    if inner[cursor:].strip() or set(found) != set(required):
+    if inner[cursor:].strip() or set(found) not in (set(required), {*required, *optional}):
         raise ValueError("Missing required <answer> slot tags or trailing text")
     return found
 
@@ -339,23 +355,39 @@ def _parse_positions(raw: str, *, expected_balls: int | None) -> tuple[Position,
     return tuple(parsed)
 
 
+def _tag_reply(stripped: str, lenient: bool) -> bool:
+    return "<answer>" in stripped if lenient else stripped.startswith("<answer>")
+
+
 def parse_forward_answer(
-    text: str, *, ball_count: int | None = None, allow_json_fallback: bool = True
+    text: str,
+    *,
+    ball_count: int | None = None,
+    allow_json_fallback: bool = True,
+    lenient: bool = False,
 ) -> VLMForwardOutput:
     _, cleaned = split_reasoning(text)
     stripped = cleaned.strip()
-    if not stripped.startswith("<answer>"):
+    if not _tag_reply(stripped, lenient):
         if not allow_json_fallback:
             raise ValueError("Forward reply must start with <answer>")
         parsed = VLMForwardOutput.model_validate_json(stripped)
         if ball_count is not None and len(parsed.resting_state) != ball_count:
             raise ValueError("Forward JSON slot count disagrees with scene inventory")
         return parsed
-    tags = _extract_answer_tags(stripped, FORWARD_TAGS)
+    tags = _extract_answer_tags(stripped, FORWARD_TAGS, lenient=lenient)
     horizons = tuple(_parse_positions(tags[tag], expected_balls=ball_count) for tag in HORIZON_TAGS)
     inferred_balls = ball_count if ball_count is not None else len(horizons[-1])
     if any(len(row) != inferred_balls for row in horizons):
         raise ValueError("All horizon rows must have matching ball counts")
+    return VLMForwardOutput(
+        **dict(_parse_events(tags, inferred_balls)),
+        frames=horizons[:5],
+        resting_state=horizons[5],
+    )
+
+
+def _parse_events(tags: dict[str, str], inferred_balls: int) -> ContactForecast:
     raw_collisions = tags["collisions"]
     if inferred_balls == 1:
         if raw_collisions.lower() != "none":
@@ -395,44 +427,28 @@ def parse_forward_answer(
         if any(token not in BOUNDARIES for token in tokens):
             raise ValueError(f"Invalid boundary in <cushions>: {raw_cushions!r}")
         sequence = tuple(token for token in tokens)  # type: ignore[misc]
-    return VLMForwardOutput(
+    return ContactForecast(
         object_collisions=collisions,
         first_contact=first_contact,
         cushion_set=tuple(dict.fromkeys(sequence)),
         cushion_sequence=sequence,
-        frames=horizons[:5],
-        resting_state=horizons[5],
     )
 
 
-def parse_coordinate_answer(
-    text: str, *, ball_count: int | None = None, allow_json_fallback: bool = True
-) -> CoordinateOnly:
+def parse_goal_answer(
+    text: str, *, allow_json_fallback: bool = True, lenient: bool = False
+) -> VLMGoalOutput:
+    """The shot of a 4-tag or 7-tag (contact forecast + shot) goal reply."""
     _, cleaned = split_reasoning(text)
     stripped = cleaned.strip()
-    if not stripped.startswith("<answer>"):
-        if not allow_json_fallback:
-            raise ValueError("Coordinate reply must start with <answer>")
-        parsed = CoordinateOnly.model_validate_json(stripped)
-        if ball_count is not None and len(parsed.resting_state) != ball_count:
-            raise ValueError("Coordinate JSON slot count disagrees with scene inventory")
-        return parsed
-    tags = _extract_answer_tags(stripped, HORIZON_TAGS)
-    horizons = tuple(_parse_positions(tags[tag], expected_balls=ball_count) for tag in HORIZON_TAGS)
-    return CoordinateOnly(frames=horizons[:5], resting_state=horizons[5])
-
-
-def parse_goal_answer(text: str, *, allow_json_fallback: bool = True) -> VLMGoalOutput:
-    _, cleaned = split_reasoning(text)
-    stripped = cleaned.strip()
-    if not stripped.startswith("<answer>"):
+    if not _tag_reply(stripped, lenient):
         if not allow_json_fallback:
             raise ValueError("Goal reply must start with <answer>")
         data = json.loads(stripped)
         if isinstance(data, dict) and isinstance(data.get("action"), dict) and len(data) == 1:
             data = data["action"]
         return VLMGoalOutput.model_validate(data)
-    tags = _extract_answer_tags(stripped, GOAL_TAGS)
+    tags = _extract_answer_tags(stripped, GOAL_TAGS, optional=EVENT_TAGS, lenient=lenient)
     values: dict[str, float] = {}
     for key in GOAL_TAGS:
         number = float(tags[key])
@@ -440,6 +456,23 @@ def parse_goal_answer(text: str, *, allow_json_fallback: bool = True) -> VLMGoal
             raise ValueError(f"Non-finite goal parameter in <{key}>")
         values[key] = number
     return VLMGoalOutput.model_validate(values)
+
+
+def parse_goal_forecast(
+    text: str, ball_count: int, *, lenient: bool = False
+) -> ContactForecast | None:
+    """The contact forecast of a 7-tag goal reply; None for a 4-tag (shot only) reply."""
+    _, cleaned = split_reasoning(text)
+    tags = _extract_answer_tags(cleaned.strip(), GOAL_TAGS, optional=EVENT_TAGS, lenient=lenient)
+    return _parse_events(tags, ball_count) if "collisions" in tags else None
+
+
+def normalize_goal_reply(text: str) -> str:
+    """Evaluation reading of a goal reply as GoalSubmission JSON; '' when no shot is usable."""
+    try:
+        return parse_goal_answer(text, lenient=True).model_dump_json()
+    except ValueError:
+        return ""
 
 
 def invalid_forward_scores() -> dict[str, float | bool]:
@@ -614,6 +647,19 @@ def _terminal_shift(left: Layout, right: Layout, physics: PhysicsConfig) -> floa
             for other in (by_id[ball.ball_id],)
         )
         / physics.ball_radius_m
+    )
+
+
+def requires_contact(initial: Layout, goal: Layout, radius_m: float) -> bool:
+    """True when some object ball must move more than one radius, or be pocketed, to reach goal."""
+    target = {ball.ball_id: ball for ball in goal.balls}
+    return any(
+        ball.kind != "cue"
+        and (
+            target[ball.ball_id].xy_m is None
+            or dist(ball.xy_m, target[ball.ball_id].xy_m) > radius_m
+        )
+        for ball in initial.balls
     )
 
 
@@ -841,10 +887,16 @@ def verify_vlm_suite(
     pilot: Path,
     formal: Path,
     *,
-    counts: tuple[int, int, int] = SPLIT_PAIRS,
-    ood_per_family: int = 30,
+    counts: tuple[int | dict[str, int], ...] = SPLIT_PAIRS,
+    ood_per_family: int | dict[str, int] = 30,
+    t5_attempts: int = 6,
+    min_contact_share: float = 0.5,
 ) -> dict[str, object]:
-    """Audit the published files against their manifests and independent membership invariants."""
+    """Audit the published files against their manifests and independent membership invariants.
+
+    Counts are pairs per family, either one number or a {family: pairs} mapping. In every regime at
+    least `min_contact_share` of the goals must need an object ball to move (requires_contact).
+    """
     excluded, provenance = _legacy_groups(pilot, formal)
     verified = {}
     for split, pairs in zip(SPLITS, counts, strict=True):
@@ -863,6 +915,8 @@ def verify_vlm_suite(
         ordinals: Counter[tuple[str, Family, int]] = Counter()
         group_ordinals: dict[str, int] = {}
         families: Counter[tuple[str, str, str]] = Counter()
+        contact: Counter[str] = Counter()
+        scenes: Counter[str] = Counter()
         images: set[str] = set()
         with (
             (path / "private/labels.jsonl").open() as private,
@@ -870,6 +924,12 @@ def verify_vlm_suite(
         ):
             for label_line, scene_line in zip(private, public, strict=True):
                 label, scene = json.loads(label_line), json.loads(scene_line)
+                scenes[label["regime"]] += 1
+                contact[label["regime"]] += requires_contact(
+                    Layout.model_validate(label["initial"]),
+                    Layout.model_validate(label["goal"]),
+                    PhysicsConfig().ball_radius_m,
+                )
                 initial = Layout.model_validate(label["initial"])
                 goal = Layout.model_validate(label["goal"])
                 layout_sha = layout_group(initial)
@@ -917,14 +977,14 @@ def verify_vlm_suite(
                         raise ValueError(f"{split} forward input/label mismatch {group_id}")
                     if forward_scores(truth, truth, prompt.ball_radius_m)["S_total"] != 1.0:
                         raise ValueError(f"{split} perfect-witness scoring mismatch {group_id}")
-                    if [item.max_attempts for item in goals] != [1, 6]:
+                    if [item.max_attempts for item in goals] != [1, t5_attempts]:
                         raise ValueError(f"{split} missing standard inverse tasks {group_id}")
                     images.add(prompt.image)
                 elif (
                     scene["forward"] is not None
                     or label["truth"] is not None
                     or len(goals) != 1
-                    or goals[0].max_attempts != 6
+                    or goals[0].max_attempts != t5_attempts
                     or goals[0].withheld_parameters != WITHHELD
                 ):
                     raise ValueError(f"{split} invalid OOD task or visibility {group_id}")
@@ -937,17 +997,24 @@ def verify_vlm_suite(
                     ):
                         raise ValueError(f"{split} inverse input/label mismatch {group_id}")
                     images.update((item.initial_image, item.goal_image))
+        def per_family(value: int | dict[str, int], family: str) -> int:
+            return value[family] if isinstance(value, dict) else value
+
         expected = {
-            ("standard", family, role): pairs for family in FAMILIES for role in ("anchor", "twin")
+            ("standard", family, role): per_family(pairs, family)
+            for family in FAMILIES
+            for role in ("anchor", "twin")
         }
         if split == "test" and ood_per_family:
             expected.update(
                 {
-                    (regime, family, "anchor"): ood_per_family // 2
+                    (regime, family, "anchor"): per_family(ood_per_family, family) // 2
                     for regime in ("slow_friction", "fast_friction")
                     for family in FAMILIES
                 }
             )
+        if any(contact[regime] < min_contact_share * n for regime, n in scenes.items()):
+            raise ValueError(f"{split}: too few goals need an object ball to move")
         if families != expected or set(membership) != set(
             json.loads((path / "groups.json").read_text())
         ):
@@ -1006,6 +1073,7 @@ def _export_scene(
     visibility: PublicPhysics,
     effect: float | None,
     intervention: str | None,
+    t5_attempts: Literal[3, 6] = 6,
 ) -> None:
     group_id, scene_id, initial_name, goal_name, forward_name = scene_naming(
         split, regime, family, len(initial.balls), ordinal, member
@@ -1036,8 +1104,8 @@ def _export_scene(
         ).model_dump(mode="json")
         truth = forward_truth(initial, replay, simulator.config, visibility.table)
     tasks: tuple[
-        tuple[Literal["T4_visual_inverse", "T5_interactive_adaptation"], Literal[1, 6]], ...
-    ] = (("T4_visual_inverse", 1), ("T5_interactive_adaptation", 6))
+        tuple[Literal["T4_visual_inverse", "T5_interactive_adaptation"], Literal[1, 3, 6]], ...
+    ] = (("T4_visual_inverse", 1), ("T5_interactive_adaptation", t5_attempts))
     goals = [
         VLMGoalInput(
             task_id=task_id,
@@ -1052,7 +1120,7 @@ def _export_scene(
             ball_radius_m=visibility.table.ball_radius_m,
         ).model_dump(mode="json")
         for task_id, attempts in tasks
-        if regime == "standard" or attempts == 6
+        if regime == "standard" or task_id == "T5_interactive_adaptation"
     ]
     witness = simulator.replay(initial, action)
     if (

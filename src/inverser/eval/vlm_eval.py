@@ -14,7 +14,8 @@ import httpx
 from PIL import Image
 
 from inverser.blind_protocol import verify_blind_protocol
-from inverser.capo_env import GoalEpisode
+from inverser.capo.t5_feedback import feedback_pair, t5_feedback, t5_turn_prompt
+from inverser.capo_env import GoalEpisode, event_agreement
 from inverser.evaluation import (
     BudgetExhausted,
     BudgetLimits,
@@ -40,9 +41,11 @@ from inverser.vlm_suite import (
     VLMForwardOutput,
     VLMGoalInput,
     forward_scores,
+    forward_truth,
     invalid_forward_scores,
+    normalize_goal_reply,
     parse_forward_answer,
-    parse_goal_answer,
+    parse_goal_forecast,
 )
 
 
@@ -69,9 +72,7 @@ def _png_asset(data: bytes, scene_id: str, *, initial: bool = False) -> Rendered
 def feedback_image_pair(goal: RenderedAsset, outcome: Image.Image) -> RenderedAsset:
     """Keep INIT at native scale and combine goal/latest outcome for two-image endpoints."""
     with Image.open(io.BytesIO(base64.b64decode(goal.png_base64))) as blueprint:
-        image = Image.new("RGB", (blueprint.width + 12 + outcome.width, blueprint.height), "white")
-        image.paste(blueprint, (0, 0))
-        image.paste(outcome, (blueprint.width + 12, 0))
+        image = feedback_pair(blueprint, outcome)
     buffer = io.BytesIO()
     image.save(buffer, format="PNG")
     return _png_asset(buffer.getvalue(), goal.case_id)
@@ -151,7 +152,10 @@ def run_vlm_eval(
     manifest = json.loads(manifest_path.read_text())
     blind = None
     if manifest["split"] == "test":
-        if blind_protocol is None or arm is None or count is not None or not constrain_json:
+        # Only the whole file or the manifest's pre-registered panel prefix may be evaluated.
+        panel = (manifest.get("panel_prefix") or {}).get("scene_rows")
+        unlocked = blind_protocol is None or arm is None or not constrain_json
+        if unlocked or count not in (None, panel):
             raise ValueError(
                 "Blind test must wait for a locked evaluation protocol and checkpoints"
             )
@@ -174,26 +178,29 @@ def run_vlm_eval(
         raise ValueError("Public and private row counts disagree")
     if any(row["scene_id"] != label["scene_id"] for row, label in zip(inputs, labels, strict=True)):
         raise ValueError("Public and private scene ordering disagree")
-    costs = {"forward": 1, "T4": 1, "T5": 6}
+    def cost(scene: dict[str, Any], task: str) -> int:
+        # One request per forward/T4 job; T5 may use every attempt its scene allows (6 or 3).
+        return 1 if task != "T5" else scene["goals"][-1]["max_attempts"]
+
     planned_jobs = [
         (scene, label, task)
         for scene, label in zip(inputs, labels, strict=True)
         for task in tasks
         if label["regime"] == "standard" or task == "T5"
     ]
-    request_cap = sum(costs[task] for _, _, task in planned_jobs)
+    request_cap = sum(cost(scene, task) for scene, _, task in planned_jobs)
     limits = BudgetLimits(
         max_model_requests=request_cap,
         max_total_tokens=budget_tokens,
         max_physics_evaluations=sum(
-            costs[task] for _, _, task in planned_jobs if task != "forward"
+            cost(scene, task) for scene, _, task in planned_jobs if task != "forward"
         ),
     )
     run_hash = lock_run(
         output,
         {
             "schema_version": "inverser-vlm-base-eval-v1",
-            "answer_contract": "answer-tag-v1",
+            "answer_contract": "answer-tag-v2",
             "data": file_sha256(manifest_path),
             "tasks": list(tasks),
             "count": len(inputs),
@@ -203,7 +210,7 @@ def run_vlm_eval(
             "endpoint_hash": fingerprint(backend.base_url),
             "limits": limits.model_dump(mode="json"),
             "producer": producer_hashes(
-                "vlm_eval.py", "vlm_suite.py", "capo_env.py", "study_calls.py"
+                "vlm_eval.py", "vlm_suite.py", "capo_env.py", "study_calls.py", "t5_feedback.py"
             ),
             **({"blind_protocol_sha256": blind, "arm": arm} if blind else {}),
         },
@@ -286,7 +293,7 @@ def run_vlm_eval(
                     truth = VLMForwardOutput.model_validate(label["truth"])
                     try:
                         predicted = parse_forward_answer(
-                            reply.content, ball_count=forward.ball_count
+                            reply.content, ball_count=forward.ball_count, lenient=True
                         )
                         scores = forward_scores(predicted, truth, forward.ball_radius_m)
                     except ValueError:
@@ -321,51 +328,67 @@ def run_vlm_eval(
                         checked_asset(query.goal_image, scene_id, initial=False),
                     )
                     images: tuple[RenderedAsset, ...] = initial_images
-                    prompt = query.prompt() + "\nThe images in order are INITIAL and GOAL."
-                    history = []
+                    history: list[str] = []
+                    prompt = t5_turn_prompt(query, history, with_outcome=False)
                     replies: list[dict[str, Any]] = []
+                    forecasts: list[dict[str, Any]] = []
                     while not env.done:
                         ordinal = len(replies) + 1
                         reply = send(ordinal, prompt, images)
                         replies.append(reply.model_dump(mode="json"))
+                        try:
+                            forecast = parse_goal_forecast(
+                                reply.content, query.ball_count, lenient=True
+                            )
+                        except ValueError:
+                            forecast = None
+
+                        replays: list[Replay] = []
 
                         def judge(action: CueAction) -> Replay:
-                            return recorded_replay(
-                                env.initial,
-                                action,
-                                env.simulator,
-                                ledger,
-                                namespace=f"{scene_id}/{task}/{ordinal}",
-                                role="hidden_judge",
-                            )[0]
-
-                        try:
-                            normalized = parse_goal_answer(reply.content).model_dump_json()
-                        except ValueError:
-                            normalized = ""
-                        attempt = env.step(normalized, replay_action=judge)
-                        if not env.done:
-                            feedback, image = env.feedback(attempt)
-                            history.append(feedback)
-                            prompt = (
-                                query.prompt()
-                                + "\nAttempt observations in order:\n"
-                                + ("\n".join(history))
+                            replays.append(
+                                recorded_replay(
+                                    env.initial,
+                                    action,
+                                    env.simulator,
+                                    ledger,
+                                    namespace=f"{scene_id}/{task}/{ordinal}",
+                                    role="hidden_judge",
+                                )[0]
                             )
-                            if image is not None:
-                                images = (
+                            return replays[-1]
+
+                        attempt = env.step(normalize_goal_reply(reply.content), replay_action=judge)
+                        agreement = None
+                        if forecast is not None and attempt.outcome is not None and replays:
+                            truth = forward_truth(
+                                env.initial, replays[-1], env.simulator.config, env.table
+                            )
+                            agreement = event_agreement(forecast, truth)
+                        forecasts.append(
+                            {
+                                "forecast_present": forecast is not None,
+                                "event_agreement": agreement,
+                            }
+                        )
+                        if not env.done:
+                            feedback, image = t5_feedback(env, replays[-1] if replays else None)
+                            history.append(feedback)
+                            prompt = t5_turn_prompt(query, history, with_outcome=image is not None)
+                            images = (
+                                initial_images
+                                if image is None
+                                else (
                                     initial_images[0],
                                     feedback_image_pair(initial_images[1], image),
                                 )
-                                prompt += (
-                                    "\nImages: INITIAL; GOAL (left), latest outcome (right)."
-                                )
-                            else:
-                                images = initial_images
-                                prompt += "\nImages: INITIAL, GOAL."
+                            )
                     row = info | {
                         "success": env.attempts[-1].success,
                         "attempts": [entry.model_dump(mode="json") for entry in env.attempts],
+                        "forecasts": forecasts,
+                        "max_attempts": query.max_attempts,
+                        "baseline_radii": env.baseline_radii,
                         "replies": replies,
                     }
                 save_job(job, run_hash, row)

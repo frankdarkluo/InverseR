@@ -14,22 +14,15 @@ from inverser.physics import Replay, SimulationFailure, SnookerSimulator
 from inverser.preview import render_vlm_goal_pair
 from inverser.schemas import CueAction, Layout, Record
 from inverser.study import public_physics
-from inverser.training_env import goal_reward
+from inverser.training_env import do_nothing_loss, goal_reward
 from inverser.vlm_suite import (
+    ContactForecast,
     Position,
     VLMForwardOutput,
     VLMGoalInput,
     forward_scores,
     parse_forward_answer,
     parse_goal_answer,
-)
-
-CAUSAL_PROMPT = (
-    "In the reasoning segment, first identify ball positions, aiming geometry, and the likely "
-    "ordered contacts; then consider sliding, rolling, and any 3D tip-offset spin deflection; "
-    "finally use those physical laws to calibrate the numeric prediction or shot. Keep reasoning "
-    "within 1024 tokens inside <think>...</think>, then output only the requested "
-    "<answer>...</answer> block."
 )
 
 
@@ -45,6 +38,31 @@ class ForwardReward:
         return self.event + self.gated - self.overrun_penalty
 
 
+def event_agreement(prediction: ContactForecast, truth: ContactForecast) -> float:
+    """E in [0, 1]: mean of object-collision F1, first-contact match and cushion-set match."""
+    left = {i for i, value in enumerate(prediction.object_collisions) if value}
+    right = {i for i, value in enumerate(truth.object_collisions) if value}
+    f1 = 2 * len(left & right) / (len(left) + len(right)) if left or right else 1.0
+    return (
+        f1
+        + float(prediction.first_contact == truth.first_contact)
+        + float(set(prediction.cushion_set) == set(truth.cushion_set))
+    ) / 3
+
+
+def inverse_reward(
+    mode: str, near: float, tail: float, event: float, *, alpha: float = 0.25, beta_e: float = 0.0
+) -> float:
+    """The only place the three arms differ on T4/T5: how E meets the goal reward."""
+    if mode == "outcome":
+        return tail + near
+    if mode == "additive":
+        return tail + near + beta_e * event
+    if mode == "capo":
+        return tail + near * (alpha + (1 - alpha) * event)
+    raise ValueError("Unknown reward arm")
+
+
 def forward_reward(
     prediction: VLMForwardOutput,
     truth: VLMForwardOutput,
@@ -56,10 +74,7 @@ def forward_reward(
     if not 0 <= alpha <= 1 or (reasoning_tokens is not None and reasoning_tokens < 0):
         raise ValueError("Invalid event gate or reasoning length")
     scores = forward_scores(prediction, truth, radius_m)
-    left = {i for i, value in enumerate(prediction.object_collisions) if value}
-    right = {i for i, value in enumerate(truth.object_collisions) if value}
-    f1 = 2 * len(left & right) / (len(left) + len(right)) if left or right else 1.0
-    event = 0.5 * (f1 + float(set(prediction.cushion_set) == set(truth.cushion_set)))
+    event = event_agreement(prediction, truth)
     distances = [
         dist(p, t) / radius_m
         if isinstance(p, tuple) and isinstance(t, tuple)
@@ -189,6 +204,16 @@ class GoalEpisode:
     def done(self) -> bool:
         return len(self.attempts) >= self.task.max_attempts or (
             bool(self.attempts) and self.attempts[-1].success
+        )
+
+    @property
+    def baseline_radii(self) -> float:
+        """L0: the goal error of not shooting, the zero point of the inverse goal reward."""
+        return do_nothing_loss(
+            self.initial,
+            self.target,
+            ball_radius_m=self.table.ball_radius_m,
+            table_metres=self.task.table_metres,
         )
 
     def step(

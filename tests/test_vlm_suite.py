@@ -7,6 +7,7 @@ from PIL import ImageChops
 from pydantic import ValidationError
 
 from inverser.capo_trainer import sft_examples
+from inverser.model_adapters import CAUSAL_PROMPT
 from inverser.physics import SnookerSimulator
 from inverser.preview import render_vlm_forward_scene, render_vlm_goal_pair
 from inverser.schemas import BallPosition, CueAction, Layout, PhysicsConfig
@@ -15,20 +16,21 @@ from inverser.study_calls import local_vllm_backends
 from inverser.vlm_eval import run_vlm_eval
 from inverser.vlm_suite import (
     WITHHELD,
-    CoordinateOnly,
+    ContactForecast,
     VLMForwardOutput,
     VLMGoalInput,
     VLMGoalOutput,
-    format_coordinate_answer,
     format_forward_answer,
     format_goal_answer,
     forward_scores,
     forward_truth,
     layout_group,
-    parse_coordinate_answer,
+    normalize_goal_reply,
     parse_forward_answer,
     parse_goal_answer,
+    parse_goal_forecast,
     prepare_vlm_suite,
+    requires_contact,
     verify_vlm_suite,
 )
 
@@ -119,17 +121,37 @@ def test_answer_tag_serializers_and_strict_parsers_cover_edge_cases():
     assert parse_forward_answer(format_forward_answer(solo), ball_count=1) == solo
     assert forward_scores(solo, solo, 0.0262)["S_total_3r"] == 1.0
 
-    coords = CoordinateOnly(frames=multi.frames, resting_state=multi.resting_state)
-    assert (
-        parse_coordinate_answer(
-            format_coordinate_answer(coords), ball_count=3, allow_json_fallback=False
-        )
-        == coords
-    )
-
     shot = VLMGoalOutput(azimuth_deg=62.45, cue_speed_mps=1.38, tip_side=0.0, tip_vertical=0.25)
     tagged_shot = f"<think>follow shot</think>\n{format_goal_answer(shot)}"
     assert parse_goal_answer(tagged_shot, allow_json_fallback=False) == shot
+    assert parse_goal_forecast(tagged_shot, 3) is None  # 4-tag shot: no forecast, still a shot
+    events = ContactForecast.model_validate(
+        {key: getattr(multi, key) for key in ContactForecast.model_fields}
+    )
+    forecast_shot = f"<think>cut ball 1</think>\n{format_goal_answer(shot, forecast=events)}"
+    assert parse_goal_answer(forecast_shot, allow_json_fallback=False) == shot
+    assert parse_goal_forecast(forecast_shot, 3) == events
+    partial = format_goal_answer(shot, forecast=events).replace(
+        "<first_contact>1</first_contact>\n", ""
+    )
+    for parse in (lambda text: parse_goal_answer(text), lambda text: parse_goal_forecast(text, 3)):
+        with pytest.raises(ValueError, match="Missing required"):
+            parse(partial)  # contact tags come all together or not at all
+    # RL is strict about text around the single <answer> block; evaluation is lenient.
+    chatty = f"Budget spent; the shot:\n{format_goal_answer(shot, forecast=events)}\nDone."
+    with pytest.raises(ValueError):
+        parse_goal_forecast(chatty, 3)
+    assert parse_goal_forecast(chatty, 3, lenient=True) == events
+    assert normalize_goal_reply(chatty) == shot.model_dump_json()
+    assert normalize_goal_reply(f"{chatty}\n{format_goal_answer(shot)}") == ""  # two blocks
+    chatty_forward = f"Prediction:\n{format_forward_answer(multi)}"
+    with pytest.raises(ValueError):
+        parse_forward_answer(chatty_forward, ball_count=3, allow_json_fallback=False)
+    assert parse_forward_answer(chatty_forward, ball_count=3, lenient=True) == multi
+    with pytest.raises(ValueError, match="colliding object ball"):
+        ContactForecast(
+            object_collisions=(False,), first_contact=1, cushion_set=(), cushion_sequence=()
+        )
     # Historical JSON fallback remains available only when enabled.
     assert parse_goal_answer(shot.model_dump_json()) == shot
     with pytest.raises(ValueError):
@@ -188,7 +210,8 @@ def test_prepare_and_verify_twin_splits(tmp_path, monkeypatch, study_fixture):
     receipt = prepare_vlm_suite(root, pilot, formal, **options)
     assert receipt["group_overlap"] == 0
     assert receipt["splits"]["test"]["witness_replays_verified"] == 16
-    verified = verify_vlm_suite(root, pilot, formal, **options)
+    # The one-pair-per-family toy suite is too small for the contact-share rule.
+    verified = verify_vlm_suite(root, pilot, formal, **options, min_contact_share=0)
     assert verified["status"] == "verified" and verified["splits"]["train"]["scenes"] == 8
     seen = {layout_group(record.initial)}
     for split in ("train", "valid", "test"):
@@ -231,6 +254,12 @@ def test_prepare_and_verify_twin_splits(tmp_path, monkeypatch, study_fixture):
     assert forward_scores(parsed_fwd, truth_out, 0.0262)["S_total"] == 1.0
     parsed_inv = parse_goal_answer(inv_comp, allow_json_fallback=False).cue_action()
     assert parsed_inv.azimuth_deg == pytest.approx(action.azimuth_deg, abs=1e-3)
+    # The T4 target forecasts exactly the contacts of the labelled shot.
+    forecast = parse_goal_forecast(inv_comp, len(truth_out.resting_state))
+    assert forecast is not None
+    assert forecast.object_collisions == truth_out.object_collisions
+    assert forecast.first_contact == truth_out.first_contact
+    assert forecast.cushion_sequence == truth_out.cushion_sequence
     with pytest.raises(ValueError, match="training"):
         sft_examples(root / "inverser-vlm-v1/valid", count=1)
     error_action = action.model_copy(update={"azimuth_deg": (action.azimuth_deg + 180) % 360})
@@ -275,8 +304,11 @@ def test_prepare_and_verify_twin_splits(tmp_path, monkeypatch, study_fixture):
     run = root / "evaluation"
     evaluated = run_vlm_eval(train, run, backend, **run_options)
     assert evaluated["status"] == "complete" and evaluated["jobs"] == 3
-    assert all("response_format" not in body and body["stop"] == ["</answer>"] for body in payloads)
-    assert all(body["include_stop_str_in_output"] is True for body in payloads)
+    # Same system prompt as SFT/RL, no stop string, and TRL's images-before-text layout.
+    unwanted = {"response_format", "stop", "include_stop_str_in_output"}
+    assert all(not unwanted & set(body) for body in payloads)
+    assert all(body["messages"][0]["content"] == CAUSAL_PROMPT for body in payloads)
+    assert all(body["messages"][1]["content"][-1]["type"] == "text" for body in payloads)
     t5_job = json.loads(next((run / "jobs").glob("*-T5.json")).read_text())["payload"]
     assert t5_job["success"] is True and len(t5_job["attempts"]) == 2
     fwd_job = json.loads(next((run / "jobs").glob("*-forward.json")).read_text())["payload"]
@@ -288,9 +320,10 @@ def test_prepare_and_verify_twin_splits(tmp_path, monkeypatch, study_fixture):
         "physics_evaluations": 2,
     }
     assert [len(message) for message in prompts] == [2, 3, 3, 3]
-    assert "latest outcome (right)" in prompts[3][0]["text"]
+    assert "latest outcome (right)" in prompts[3][-1]["text"]
     assert (
-        '"action":' not in prompts[1][0]["text"] and "Attempt observations" in prompts[3][0]["text"]
+        '"action":' not in prompts[1][-1]["text"]
+        and "Attempt observations" in prompts[3][-1]["text"]
     )
     resumed = run_vlm_eval(train, run, backend, **run_options)
     assert len(prompts) == 4 and resumed["simulator_rollouts_this_process"] == 0
@@ -298,8 +331,36 @@ def test_prepare_and_verify_twin_splits(tmp_path, monkeypatch, study_fixture):
         run_vlm_eval(here, root / "blind", backend, **run_options)
     (here / "groups.json").write_text("[]")
     with pytest.raises(ValueError, match="checksum mismatch"):
-        verify_vlm_suite(root, pilot, formal, **options)
+        verify_vlm_suite(root, pilot, formal, **options, min_contact_share=0)
 
 
 def _rows(path: Path):
     return [json.loads(line) for line in path.read_text().splitlines()]
+
+
+def test_t5_three_attempt_cap_and_contact_requirement():
+    physics = PhysicsConfig()
+    visibility = public_physics(SnookerSimulator(physics))
+    common = {
+        "episode_id": "e",
+        "initial_image": "i.png",
+        "goal_image": "g.png",
+        "ball_count": 2,
+        "table_metres": (visibility.table.width_m, visibility.table.length_m),
+        "ball_radius_m": physics.ball_radius_m,
+        "parameters": visibility.parameters,
+    }
+    assert VLMGoalInput(task_id="T5_interactive_adaptation", max_attempts=3, **common)
+    with pytest.raises(ValidationError):
+        VLMGoalInput(task_id="T4_visual_inverse", max_attempts=3, **common)
+    r = physics.ball_radius_m
+    cue = BallPosition(ball_id="cue", kind="cue", xy_m=(0.4, 0.4))
+    initial = Layout(balls=(cue, BallPosition(ball_id="red", kind="red", xy_m=(0.9, 0.9))))
+
+    def goal(**red: object) -> Layout:
+        moved = cue.model_copy(update={"xy_m": (0.6, 1.5)})
+        return Layout(balls=(moved, BallPosition(ball_id="red", kind="red", **red)))
+
+    assert not requires_contact(initial, goal(xy_m=(0.9 + 0.5 * r, 0.9)), r)
+    assert requires_contact(initial, goal(xy_m=(0.9 + 2 * r, 0.9)), r)
+    assert requires_contact(initial, goal(status="pocketed"), r)

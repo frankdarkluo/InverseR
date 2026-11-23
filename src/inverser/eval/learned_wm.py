@@ -90,7 +90,11 @@ def cem(
         mean = points.mean(dim=0)
         scale = points.std(dim=0, correction=0).maximum(floor)
     assert best is not None
-    angle, speed, side, vertical = map(float, best.tolist())
+    return decode_action(best), best_cost
+
+
+def decode_action(point: Tensor) -> CueAction:
+    angle, speed, side, vertical = map(float, point.tolist())
     # Float32 projection can overshoot the exact CueAction disk by a few ULPs.
     norm = max(1.0, hypot(side, vertical))
     return CueAction(
@@ -98,7 +102,7 @@ def cem(
         cue_speed_mps=speed * 3,
         tip_side=side / (2 * norm),
         tip_vertical=vertical / (2 * norm),
-    ), best_cost
+    )
 
 
 def transformer(width: int, layers: int) -> nn.TransformerEncoder:
@@ -512,7 +516,7 @@ def train_world_model(
         cache, mapped = encode_patches(
             train, rows, train_manifest["artifact_sha256"], dino_path, device
         )
-        model = LatentDynamics(cache.shape[1], cache.shape[2]).to(device)
+        model: nn.Module = LatentDynamics(cache.shape[1], cache.shape[2]).to(device)
         batch_size = 48
     else:
         states, targets = [], []
@@ -585,6 +589,159 @@ def train_world_model(
         "counts": {"model_requests": 0},
         "usage": {},
         "valid": result,
+    }
+    write_json(output / "summary.json", report)
+    return report
+
+
+ORACLE_REFINE_EVALS = 1500
+ORACLE_RESTARTS = 4
+
+
+def _oracle_scene(item: tuple[int, dict, int, int, int]) -> list[dict[str, Any]]:
+    """Ground-truth state + true Pooltool: CEM, then local Nelder-Mead refinement (upper bound)."""
+    from scipy.optimize import minimize
+
+    from inverser.study import public_physics
+    from inverser.vlm_suite import forward_truth
+
+    torch.set_num_threads(1)
+    index, label, seed, refine_evals, max_attempts = item
+    config = PhysicsConfig()
+    simulator = SnookerSimulator(config)
+    initial, goal = Layout.model_validate(label["initial"]), Layout.model_validate(label["goal"])
+    diagonal = hypot(config.table_width_m, config.table_length_m)
+    info = {key: label[key] for key in ("scene_id", "group_id", "family")}
+    truth = VLMForwardOutput.model_validate(label["truth"])
+    witness = simulator.replay(initial, CueAction.model_validate(label["action"]))
+    replayed = forward_truth(initial, witness, config, public_physics(simulator).table)
+    forward = info | {
+        "task": "forward",
+        "valid": True,
+        "scores": forward_scores(replayed, truth, config.ball_radius_m),
+        "true_object_collision": any(truth.object_collisions),
+        "predicted_no_object_collision": not any(replayed.object_collisions),
+    }
+
+    def loss(point: Tensor) -> float:
+        try:
+            replay = simulator.replay(initial, decode_action(point))
+            value = endpoint_loss(
+                replay.goal, goal, ball_radius_m=config.ball_radius_m, table_diagonal_m=diagonal
+            )
+        except SimulationFailure:
+            value = float("inf")
+        return min(value, 1e6)
+
+    def cost(points: Tensor) -> Tensor:
+        return torch.tensor([loss(point) for point in points])
+
+    def project(x: np.ndarray) -> Tensor:
+        return project_actions(torch.tensor(x, dtype=torch.float64))
+
+    def plan(cem_seed: int) -> tuple[CueAction, float]:
+        action, value = cem(cost, device="cpu", seed=cem_seed)
+        if not refine_evals:
+            return action, value
+        # CEM's 640 samples cannot resolve 1r on a 3.6 m table; polish locally with Pooltool.
+        start = np.array(encode_action(action))
+        simplex = start + np.vstack([np.zeros(4), np.diag([0.003, 0.02, 0.1, 0.1])])
+        result = minimize(
+            lambda x: loss(project(x)),
+            start,
+            method="Nelder-Mead",
+            options={"initial_simplex": simplex, "maxfev": refine_evals, "fatol": 1e-3},
+        )
+        return decode_action(project(result.x)), float(result.fun)
+
+    # Internal restarts are planning only; each executed attempt still fires a single shot.
+    restarts = ORACLE_RESTARTS if refine_evals else 1
+    attempts = []
+    for attempt in range(max_attempts):  # the scene's T5 cap: 6 in v1, 3 in inverser-v3
+        # Attempt 0 uses the learned-WM CEM seed, so the T4 rows differ only in the dynamics.
+        action, best = plan(seed + index + 1000 * attempt)
+        for restart in range(1, restarts):
+            if best <= 1:  # endpoint_loss <= 1 radius is exactly a non-scratch success
+                break
+            candidate, value = plan(seed + index + 1000 * attempt + 100_000 * restart)
+            if value < best:
+                action, best = candidate, value
+        replay = simulator.replay(initial, action)
+        judged = score_endpoint(replay.goal, goal, config.ball_radius_m)
+        attempts.append(
+            {
+                "ordinal": attempt + 1,
+                "action": action.model_dump(mode="json"),
+                "success": judged.success,
+                "failure": judged.failure,
+                "loss_radii": endpoint_loss(
+                    replay.goal, goal, ball_radius_m=config.ball_radius_m, table_diagonal_m=diagonal
+                ),
+            }
+        )
+        if judged.success:
+            break
+    goal_rows = [
+        info
+        | {"task": task, "ood": False, "success": shots[-1]["success"], "attempts": shots}
+        | {"max_attempts": cap}
+        for task, shots, cap in (("T4", attempts[:1], 1), ("T5", attempts, max_attempts))
+    ]
+    return [forward, *goal_rows, {"simulator_rollouts": simulator.rollouts}]
+
+
+def run_oracle_cem(
+    valid: Path,
+    output: Path,
+    *,
+    seed: int,
+    workers: int,
+    refine_evals: int = ORACLE_REFINE_EVALS,
+    count: int | None = None,
+) -> dict[str, Any]:
+    from concurrent.futures import ProcessPoolExecutor
+
+    from inverser.runtime import fingerprint
+
+    _, rows = read_split(valid, "valid", count)
+    caps = {row["public"]["goals"][-1]["max_attempts"] for row in rows}
+    if len(caps) != 1:
+        raise ValueError("One oracle run needs a single T5 attempt cap")
+    create_artifact_dir(output, 50_000_000)
+    protocol = {
+        "schema_version": "oracle-cem-v1",
+        "baseline": "ground-truth state + Pooltool cost, same CEM as learned WMs",
+        "seed": seed,
+        "attempts": caps.pop(),
+        **({"count": count} if count is not None else {}),
+        "valid_manifest_sha256": file_sha256(valid / "manifest.json"),
+        "cem_iterations_population_elite": DEFAULT_CEM,
+        # Omitted at 0 so the matched-budget diagnostic run keeps its original manifest.
+        **(
+            {"refine_nelder_mead_evals": refine_evals, "restarts_per_attempt": ORACLE_RESTARTS}
+            if refine_evals
+            else {}
+        ),
+    }
+    run_hash = fingerprint(protocol)
+    write_json(output / "manifest.json", protocol | {"run_hash": run_hash})
+    cap = protocol["attempts"]
+    items = [(i, r["label"], seed, refine_evals, cap) for i, r in enumerate(rows)]
+    with ProcessPoolExecutor(workers) as pool:
+        scenes = list(pool.map(_oracle_scene, items))
+    rollouts = 0
+    for index, scene in enumerate(scenes):
+        *jobs, counter = scene
+        rollouts += counter["simulator_rollouts"]
+        for job in jobs:
+            save_job(output / "jobs" / f"{index:04d}-{job['task']}.json", run_hash, job)
+    report = {
+        "status": "complete",
+        "run_hash": run_hash,
+        "jobs": 3 * len(rows),
+        "counts": {"model_requests": 0},
+        "usage": {},
+        "simulator_rollouts": rollouts,
     }
     write_json(output / "summary.json", report)
     return report

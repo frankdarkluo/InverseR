@@ -6,6 +6,7 @@ build/
 dist/
 
 # Virtual environments and local configuration
+/envs/
 .venv/
 .venv-train/
 .venv-iphyre/
@@ -17,6 +18,7 @@ env/
 !.env.example
 
 # Tool caches and reports
+/cache/
 .cache/
 .pytest_cache/
 .ruff_cache/
@@ -38,17 +40,18 @@ Thumbs.db
 !/data/README.md
 !/data/research/
 /data/research/*
-!/data/research/inverser-vlm-v1/
+!/data/research/inverser-v3/
+/data/research/inverser-v3/*
+!/data/research/inverser-v3/sft_pool/
+/data/research/inverser-v3/sft_pool/*
+!/data/research/inverser-v3/sft_pool/manifest.json
+!/data/research/inverser-v3/inverser-vlm-v1/
+/data/research/inverser-v3/inverser-vlm-v1/*
+!/data/research/inverser-v3/inverser-vlm-v1/*/
+/data/research/inverser-v3/inverser-vlm-v1/*/*
+!/data/research/inverser-v3/inverser-vlm-v1/*/manifest.json
+!/data/research/inverser-vlm-v1
 /data/research/inverser-vlm-v1/*
-!/data/research/inverser-vlm-v1/train/
-/data/research/inverser-vlm-v1/train/*
-!/data/research/inverser-vlm-v1/train/manifest.json
-!/data/research/inverser-vlm-v1/valid/
-/data/research/inverser-vlm-v1/valid/*
-!/data/research/inverser-vlm-v1/valid/manifest.json
-!/data/research/inverser-vlm-v1/test/
-/data/research/inverser-vlm-v1/test/*
-!/data/research/inverser-vlm-v1/test/manifest.json
 !/data/research/capo-sft-tag-400step-bs32-seed20261119-v1/
 /data/research/capo-sft-tag-400step-bs32-seed20261119-v1/*
 !/data/research/capo-sft-tag-400step-bs32-seed20261119-v1/manifest.json
@@ -71,3 +74,29 @@ Thumbs.db
 *.pt
 *.pth
 *.safetensors
+# Canonical InverseR dataset: manifests (artifact hashes) and layout-group lists only
+!/data/research/inverser/
+/data/research/inverser/*
+!/data/research/inverser/*/
+/data/research/inverser/*/*
+!/data/research/inverser/*/manifest.json
+!/data/research/inverser/*/groups.json
+!/data/research/inverser-sft-think/
+/data/research/inverser-sft-think/*
+!/data/research/inverser-sft-think/manifest.json
+# FAPO v3 receipts: SFT, beta_E calibration, RL queue and per-run manifests/summaries/metrics
+!/data/research/capo-sft-v3-2400step-bs32-seed20261119-v1/
+/data/research/capo-sft-v3-2400step-bs32-seed20261119-v1/*
+!/data/research/capo-sft-v3-2400step-bs32-seed20261119-v1/manifest.json
+!/data/research/capo-sft-v3-2400step-bs32-seed20261119-v1/summary.json
+!/data/research/capo-sft-v3-2400step-bs32-seed20261119-v1/metrics.csv
+!/data/research/capo-v3-beta-e.json
+!/data/research/capo-v3-rl-v1/
+/data/research/capo-v3-rl-v1/*
+!/data/research/capo-v3-rl-v1/*.csv
+!/data/research/capo-v3-rl-v1/input-sha256.txt
+!/data/research/capo-v3-rl-v1/*/
+/data/research/capo-v3-rl-v1/*/*
+!/data/research/capo-v3-rl-v1/*/manifest.json
+!/data/research/capo-v3-rl-v1/*/summary.json
+!/data/research/capo-v3-rl-v1/*/metrics.csv

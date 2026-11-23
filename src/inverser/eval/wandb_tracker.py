@@ -33,6 +33,14 @@ _STEP_METRIC_MAP = {
     "reward/valid_format_rate": "reward/valid_format_rate",
     "reward/t4_goal_hit_rate": "reward/t4_goal_hit_rate",
     "reward/t4_mean_loss_radii": "reward/t4_mean_loss_radii",
+    "reward/goal_hit_rate": "reward/goal_hit_rate",
+    "reward/event_agreement": "reward/event_agreement",
+    "shot/near_mean": "shot/near_mean",
+    "shot/tail_mean": "shot/tail_mean",
+    "shot/zero_contact_rate": "shot/zero_contact_rate",
+    "shot/cue_speed_mean": "shot/cue_speed_mean",
+    "shot/cue_speed_median": "shot/cue_speed_median",
+    "t5/turn_mean": "t5/turn_mean",
     "entropy": "policy/entropy",
     "kl": "policy/kl",
     "tools/call_frequency": "tools/call_frequency",
@@ -62,6 +70,8 @@ _TRAIN_METRIC_PREFIXES = (
     "completions/*",
     "tools/*",
     "curriculum/*",
+    "shot/*",
+    "t5/*",
 )
 
 
@@ -358,9 +368,10 @@ def _flatten_eval_analysis(analysis: dict[str, Any]) -> dict[str, float | int]:
                 flat[f"eval/{arm}/{metric}"] = float(val)
         if isinstance(content.get("T4", {}).get("rate"), (int, float)):
             flat[f"eval/{arm}/T4_rate"] = float(content["T4"]["rate"])
-        t5_6 = content.get("T5_by_attempt", {}).get("6", {}).get("rate")
-        if isinstance(t5_6, (int, float)):
-            flat[f"eval/{arm}/T5_by_6_rate"] = float(t5_6)
+        curve = content.get("T5_by_attempt") or {}
+        t5_last = curve[max(curve, key=int)].get("rate") if curve else None  # T5@cap: 6 v1, 3 v3
+        if isinstance(t5_last, (int, float)):
+            flat[f"eval/{arm}/T5_by_last_rate"] = float(t5_last)
     for pair_name, metrics in analysis.get("paired", {}).items():
         for metric, stats in metrics.items():
             diff = stats.get("mean_difference_a_minus_b")

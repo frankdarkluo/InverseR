@@ -1,0 +1,19 @@
+{
+  "alpha": 0.25,
+  "beta_e": 0.14268819692263596,
+  "mean_r_near": 0.19025092923018128,
+  "rule": "beta_E = (1 - alpha) * mean R_near of sampled SFT T4 shots",
+  "runs": [
+    "2a4fa49cfc3eb7d6084ee5a6f170059969bf26bee312d33180fa4f008d6eafb8",
+    "cda0eff6eb8fd936e12b8655e4fb73386e4e30947c128c703c673d6ea8d9c676",
+    "4a2a96987d2b9b05db0d80469b60b709ca5a16a3ff2ab83330704878cd55e5c9",
+    "2843a228332303d67ed85cad5f5de5bff4175d609baa91dfc8e796687e5f78b6",
+    "e4397f246afa3bc9e930f2997633b0f88c5c0f8d843555b6d3050c99599ca9bd",
+    "4331079eecafd41b9beabb1e3bfd899a77b462d371173914d249a37faad408ac",
+    "52983d9903ee6b0967529f26fe71ee5ef4b8bf020821abab7b36bba59a65912b",
+    "1242aa7bc7504b92cc18071c08e58c350919b97782dfda7653a84c6fbb1412e6"
+  ],
+  "samples": 512,
+  "split_manifest_sha256": "8a416a57876edb12fbea2c3f83a722df289c62ceff89ce4be32f04526cd38344",
+  "status": "complete"
+}

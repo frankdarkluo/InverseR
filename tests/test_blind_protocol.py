@@ -8,7 +8,10 @@ from inverser.runtime import file_sha256, fingerprint, write_json
 from inverser.study_calls import local_vllm_backends, save_job
 
 
-def test_checkpoint_selection_rejects_partial_or_wrong_scene_inventory(tmp_path, monkeypatch):
+@pytest.mark.parametrize("v3_prefix", [False, True])
+def test_checkpoint_selection_rejects_partial_or_wrong_scene_inventory(
+    tmp_path, monkeypatch, v3_prefix
+):
     from inverser import study_calls
 
     monkeypatch.setattr(study_calls, "PROJECT_ROOT", tmp_path)
@@ -16,14 +19,16 @@ def test_checkpoint_selection_rejects_partial_or_wrong_scene_inventory(tmp_path,
     valid = root / "valid/manifest.json"
     scenes = valid.parent / "public/scenes.jsonl"
     scenes.parent.mkdir(parents=True)
-    scenes.write_text('{"scene_id":"x"}\n')
+    # v3: selection reads only the pre-registered prefix ("x"), never the rest ("y").
+    scenes.write_text('{"scene_id":"x"}\n' + ('{"scene_id":"y"}\n' if v3_prefix else ""))
     write_json(
         valid,
         {
             "split": "valid",
-            "standard_scene_count": 1,
+            "standard_scene_count": 2 if v3_prefix else 1,
             "artifact_sha256": {"public/scenes.jsonl": file_sha256(scenes)},
-        },
+        }
+        | ({"panel_prefix": {"layout_groups": 1, "scene_rows": 1}} if v3_prefix else {}),
     )
     candidates = {}
     for name in ("partial", "lower", "better"):

@@ -56,7 +56,7 @@ def iphyre_call(request: dict, suite: str = "iphyre") -> dict[str, Any]:
         [
             str(
                 PROJECT_ROOT
-                / (".venv/bin/python" if suite == "pooltool" else f".venv-{suite}/bin/python")
+                / ("envs/main/bin/python" if suite == "pooltool" else f"envs/{suite}/bin/python")
             ),
             str(PROJECT_ROOT / f"scripts/{suite}_runner.py"),
         ],
