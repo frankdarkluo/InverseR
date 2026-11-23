@@ -218,6 +218,7 @@ def run_sft(
     steps: int,
     seed: int,
     effective_batch_size: int = 32,
+    save_every: int | None = None,
 ) -> dict[str, object]:
     # Keep optional GPU packages and CUDA initialization out of corpus and scoring commands.
     import torch
@@ -290,7 +291,10 @@ def run_sft(
         bf16=True,
         learning_rate=2e-5,
         logging_steps=1,
-        save_strategy="no",
+        # Intermediate adapters (checkpoint-N) let validation track T4 during long SFT runs.
+        save_strategy="steps" if save_every else "no",
+        save_steps=save_every or 500,
+        save_only_model=True,
         report_to=[],
         remove_unused_columns=False,
         disable_tqdm=True,
