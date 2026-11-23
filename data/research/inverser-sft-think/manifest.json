@@ -1,0 +1,28 @@
+{
+  "dataset": "inverser-sft-think",
+  "schema_version": "inverser-sft-v2",
+  "split": "train",
+  "source": {
+    "split": "data/research/inverser/sft",
+    "manifest_sha256": "521cb1e4d4c5ceb02fd39ff498fa3cf9cc194a5decd127b7cc6c0f91d8fd2610",
+    "scenes": 122956
+  },
+  "builder_sha256": "b900a42ad6975398ba14ffafa61cc54cc7200cca5f3512bfcc959005aaf2ab28",
+  "sft_examples": {
+    "total": 245912,
+    "forward": 122956,
+    "inverse": 122956
+  },
+  "artifact_sha256": {
+    "sft.jsonl": "dc3251eb52554758e45c7971e4f2584277fd3a1ef038d2d89c767d656848dff6"
+  },
+  "standard_scene_count": 122956,
+  "independent_layout_groups": 61478,
+  "family_counts": {
+    "standard/center": 17931,
+    "standard/free_roll": 7685,
+    "standard/side": 17931,
+    "standard/vertical": 17931
+  },
+  "witness_replays_verified": 122956
+}
